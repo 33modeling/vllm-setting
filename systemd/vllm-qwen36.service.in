@@ -1,0 +1,18 @@
+[Unit]
+Description=vLLM Qwen3.6-27B local server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__WORKDIR__
+Environment=PYTHONUNBUFFERED=1
+ExecStart=__WORKDIR__/run-qwen36-27b.sh
+ExecStop=__WORKDIR__/stop-vllm.sh
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=60
+KillMode=mixed
+
+[Install]
+WantedBy=default.target

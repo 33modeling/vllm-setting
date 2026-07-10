@@ -1,4 +1,5 @@
 .env
+.env.backup.*
 vllm.pid
 *.log
 __pycache__/
