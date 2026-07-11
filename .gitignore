@@ -4,3 +4,8 @@ vllm.pid
 *.log
 __pycache__/
 .venv/
+qwen3-coder-2080ti/.env
+qwen3-coder-2080ti/llama.cpp/
+qwen3-coder-2080ti/models/
+qwen3-coder-2080ti/.venv-vllm/
+qwen3-coder-2080ti/*.pid
