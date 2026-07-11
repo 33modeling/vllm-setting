@@ -178,20 +178,15 @@ GPU_MEMORY_UTILIZATION=0.90
 MAX_NUM_SEQS=1
 ```
 
-큰 repo 작업에서 더 긴 컨텍스트가 필요하면 `.env`에서 먼저 이렇게 올려 보세요.
-
-```bash
-MAX_MODEL_LEN=98304
-GPU_MEMORY_UTILIZATION=0.92
-```
-
-128K가 필요하면 KV cache dtype을 줄이는 설정을 같이 테스트하세요.
+Qwen3.6-27B는 하이브리드 어텐션(레이어 4개 중 1개만 full attention)이라 KV cache가 토큰당 약 64KB로 작습니다. 128K도 bf16 KV 그대로 여유 있게 들어갑니다.
 
 ```bash
 MAX_MODEL_LEN=131072
-KV_CACHE_DTYPE=fp8
-GPU_MEMORY_UTILIZATION=0.95
+KV_CACHE_DTYPE=auto
+GPU_MEMORY_UTILIZATION=0.90
 ```
+
+`KV_CACHE_DTYPE=fp8`은 이 모델에서는 메모리상 불필요하고 품질을 약간 깎을 수 있으므로 쓰지 않습니다.
 
 OOM이 나면 `MAX_MODEL_LEN`을 `98304` 또는 `65536`으로 낮추는 쪽이 가장 효과적입니다.
 
