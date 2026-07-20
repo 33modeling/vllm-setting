@@ -9,6 +9,7 @@
 | 구성 | 하드웨어 | 모델 | 백엔드 | API |
 |---|---|---|---|---|
 | 루트 디렉터리 (기본) | 2x RTX 4090 | `Qwen/Qwen3.6-27B-FP8` | vLLM | `http://localhost:8000/v1`, 모델명 `qwen3.6-27b-fp8` |
+| `qwen36-35b-uncensored/` | 2x RTX 4090 (루트와 같은 서버) | `Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive` (Q6_K_P GGUF) | llama.cpp | `http://127.0.0.1:8080/v1`, 모델명 `qwen3.6-35b-uncensored` |
 | `qwen3-coder-2080ti/` | 2x RTX 2080 Ti (11 GB x 2) | `Qwen3-Coder-30B-A3B-Instruct` | llama.cpp(권장) / vLLM(best-effort) | `http://127.0.0.1:8080/v1`(llama.cpp), 모델명 `qwen3-coder-30b-a3b` |
 
 모든 튜닝 값은 `.env` 파일로 오버라이드할 수 있고, 스크립트 자체를 수정할 필요가 없도록 설계되어 있습니다.
@@ -31,6 +32,13 @@ vllm-setting/
 │   └── 128k.env               # 롱 컨텍스트 프로필 (MAX_MODEL_LEN=131072)
 ├── systemd/
 │   └── vllm-qwen36.service.in # systemd user 서비스 템플릿
+├── qwen36-35b-uncensored/     # 같은 4090 서버용 35B uncensored llama.cpp 구성
+│   ├── install-llama-cpp.sh   # llama.cpp CUDA 빌드 (SM 8.9)
+│   ├── download-gguf.sh       # HauhauCS GGUF 다운로드 (기본 Q6_K_P, 선택 mmproj)
+│   ├── run-llama-server.sh    # llama-server 실행 (128K ctx, VRAM 사전 점검)
+│   ├── health-check.sh        # /v1/models + chat completion 확인
+│   ├── stop-server.sh         # PID 파일 기반 서버 종료
+│   └── .env.example           # 설정 예시
 └── qwen3-coder-2080ti/        # 2x RTX 2080 Ti용 별도 구성
     ├── install-llama-cpp.sh   # llama.cpp CUDA 빌드 (SM 7.5)
     ├── download-gguf.sh       # GGUF 모델 다운로드 (기본 Q4_K_S)
@@ -445,6 +453,29 @@ claude
 - **병렬 요청은 `MAX_NUM_SEQS`가 처리.** Claude Code는 본 요청 외에 백그라운드 요청(세션 제목 생성, 서브에이전트 등)을 병렬로 보내는데, 기본값이 `2`라 별도 설정 없이 대응됩니다. 서브에이전트를 많이 쓴다면 `3`~`4`로 올리세요. prefix caching이 켜져 있어 KV cache 부담은 크지 않습니다.
 - **컨텍스트는 넉넉하게.** 에이전트의 시스템 프롬프트 + 도구 정의만으로 수만 토큰을 차지하므로 64K 이상(가능하면 `./use-profile.sh 128k`)을 권장합니다.
 - 웹 검색 같은 Anthropic 서버사이드 기능은 커스텀 백엔드에서 동작하지 않습니다.
+
+## 35B Uncensored 구성 (`qwen36-35b-uncensored/`)
+
+루트와 **같은 2x RTX 4090 서버**에서 `HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive`(Qwen3.6-35B-A3B의 uncensored 변형)를 llama.cpp로 서빙하는 구성입니다. 기본 양자화는 `Q6_K_P`(~31 GB)입니다.
+
+**왜 vLLM이 아니라 llama.cpp인가**: 이 모델은 GGUF로만 배포되고, vLLM의 GGUF 지원은 공식적으로 "highly experimental"(별도 플러그인 분리)이라 신형 하이브리드 MoE + 커스텀 K_P 양자화 조합을 현실적으로 못 돌립니다. 서드파티 FP8 safetensors 변형(~37.5 GB)이 있긴 하지만 2x24 GB에서 KV cache 여유가 없어 권장하지 않습니다. 자세한 내용은 `qwen36-35b-uncensored/README.md` 참고.
+
+```bash
+cd qwen36-35b-uncensored
+cp .env.example .env
+chmod +x *.sh
+./install-llama-cpp.sh       # llama.cpp CUDA 빌드 (SM 8.9)
+./download-gguf.sh           # Q6_K_P (~31 GB) — 이미 받았다면 .env에 MODEL_PATH만 지정
+./run-llama-server.sh        # http://127.0.0.1:8080/v1, 모델명 qwen3.6-35b-uncensored (포그라운드)
+./health-check.sh            # 다른 터미널에서
+./stop-server.sh
+```
+
+주의사항:
+
+- **루트 vLLM 27B 서버와 동시에 못 띄웁니다** (VRAM 공유). 먼저 `./stop-vllm.sh`(또는 `systemctl --user stop vllm-qwen36.service`)로 내리세요. run 스크립트가 GPU 여유 메모리를 사전 점검해 vLLM이 떠 있으면 중단합니다.
+- **thinking 모델**이라 컨텍스트 기본값이 128K(`LLAMA_CTX_SIZE=131072`)입니다 — 모델 카드가 128K 미만에서 thinking 품질 저하를 명시합니다. 하이브리드 어텐션이라 KV가 작아 f16 KV로도 들어갑니다.
+- `--jinja`로 tool calling이 처리되므로 코딩 에이전트 연결이 가능합니다. Codex 연결: `CODEX_MODEL=qwen3.6-35b-uncensored CODEX_BASE_URL=http://127.0.0.1:8080/v1 ./install-codex-config.sh` (루트에서 실행).
 
 ## 2080 Ti 구성 (`qwen3-coder-2080ti/`)
 
