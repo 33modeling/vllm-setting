@@ -8,7 +8,7 @@
 
 | 구성 | 하드웨어 | 모델 | 백엔드 | API |
 |---|---|---|---|---|
-| 루트 디렉터리 (기본) | 2x RTX 4090 | `Qwen/Qwen3.6-27B-FP8` | vLLM | `http://localhost:8000/v1`, 모델명 `qwen3.6-27b` |
+| 루트 디렉터리 (기본) | 2x RTX 4090 | `Qwen/Qwen3.6-27B-FP8` | vLLM | `http://localhost:8000/v1`, 모델명 `qwen3.6-27b-fp8` |
 | `qwen3-coder-2080ti/` | 2x RTX 2080 Ti (11 GB x 2) | `Qwen3-Coder-30B-A3B-Instruct` | llama.cpp(권장) / vLLM(best-effort) | `http://127.0.0.1:8080/v1`(llama.cpp), 모델명 `qwen3-coder-30b-a3b` |
 
 모든 튜닝 값은 `.env` 파일로 오버라이드할 수 있고, 스크립트 자체를 수정할 필요가 없도록 설계되어 있습니다.
@@ -23,7 +23,7 @@ vllm-setting/
 ├── benchmark-smoke.sh         # 코딩 프롬프트 3종 성능 스모크 테스트
 ├── use-profile.sh             # profiles/*.env를 .env로 활성화(백업 포함)
 ├── install-systemd-user.sh    # systemd --user 서비스 설치
-├── install-codex-config.sh    # Codex CLI용 ~/.codex/config.toml 생성
+├── install-codex-config.sh    # Codex 프로필 파일(~/.codex/qwen-local.config.toml) 생성
 ├── .env.example               # 루트 구성 설정 예시
 ├── profiles/
 │   ├── 64k.env                # 안정 기본 프로필 (MAX_MODEL_LEN=65536)
@@ -64,7 +64,7 @@ flowchart TD
     PID --> STOP
     HC -->|/v1/models + chat| API
     BM -->|/v1/chat/completions| API
-    CX -->|config.toml 생성| CODEX["Codex CLI"]
+    CX -->|프로필 파일 생성| CODEX["Codex CLI"]
     CODEX --> API
     CLI["Claude Code / IDE / OpenAI SDK"] --> API
 ```
@@ -75,7 +75,7 @@ flowchart TD
 
 ### `run-qwen36-27b-fp8.sh` — vLLM 서버 실행
 
-- `.env`가 있으면 로드한 뒤 `vllm serve`를 exec으로 실행합니다. 기본값: 모델 `Qwen/Qwen3.6-27B-FP8`, 서빙 이름 `qwen3.6-27b`, `PORT=8000`, `TP_SIZE=2`, `MAX_MODEL_LEN=65536`, `MAX_NUM_SEQS=2`.
+- `.env`가 있으면 로드한 뒤 `vllm serve`를 exec으로 실행합니다. 기본값: 모델 `Qwen/Qwen3.6-27B-FP8`, 서빙 이름 `qwen3.6-27b-fp8`, `PORT=8000`, `TP_SIZE=2`, `MAX_MODEL_LEN=65536`, `MAX_NUM_SEQS=2`.
 - 1인 코딩용 플래그가 기본 적용됩니다: `--enable-prefix-caching`, `--enable-chunked-prefill`, `--disable-custom-all-reduce`, `--reasoning-parser qwen3`, `--language-model-only`(이미지 입력 미사용).
 - tool calling이 기본으로 켜져 있습니다(`ENABLE_TOOL_CALLS` 기본 `1`): `--enable-auto-tool-choice --tool-call-parser qwen3_coder`를 추가합니다. `.env`에 `ENABLE_TOOL_CALLS=0`을 넣으면 꺼집니다.
 - **실행 전 사전 점검(preflight)**: ① vllm 실행파일(`VLLM_BIN` 지정 → PATH → `./.venv/bin/vllm` 순으로 탐색) ② GPU — 드라이버 존재, 개수(`TP_SIZE` 충족), `CUDA_VISIBLE_DEVICES`의 번호가 실제 존재하는지 ③ VRAM — 기본 27B 모델 기준 GPU당 요구량 충족 여부 ④ `MODEL`이 로컬 경로일 때 존재 여부 ⑤ 포트 사용 중 여부를 확인하고, 하나라도 안 맞으면 원인과 해결 방법을 에러로 출력한 뒤 중단합니다. 추가로 `/dev/shm`이 작을 때(NCCL 실패 위험)와 모델 미다운로드 상태에서 디스크 여유가 부족할 때는 경고를 출력합니다. 사양이 다른 머신에서 실행하면 어느 항목이 문제인지 바로 알 수 있습니다.
@@ -108,9 +108,9 @@ flowchart TD
 
 ### `install-codex-config.sh` — Codex CLI에 로컬 서버 등록
 
-- `.env`의 `SERVED_MODEL_NAME`/`PORT`를 읽어 `~/.codex/config.toml`에 로컬 vLLM 서버를 **선택 가능한 옵션(프로필)으로 등록**합니다. **Codex의 기본 모델은 건드리지 않습니다** — 그냥 `codex`는 원래 모델로 뜨고, 로컬 모델은 `codex --profile qwen-local`로 씁니다.
-- 기존 config.toml의 내용은 보존합니다: 마커 주석으로 감싼 관리 블록만 갱신하고, 나머지(개인 설정)는 그대로 둡니다. 실행 전 타임스탬프 백업(`config.toml.backup.*`)도 남깁니다.
-- 구버전 스크립트가 박아둔 "로컬 모델을 기본으로 강제"하는 설정이 발견되면 제거해서 원래 기본 모델을 복원합니다.
+- `.env`의 `SERVED_MODEL_NAME`/`PORT`를 읽어 로컬 vLLM 서버를 **Codex 프로필 파일** `~/.codex/qwen-local.config.toml`로 등록합니다. **Codex의 기본 모델은 건드리지 않습니다** — 그냥 `codex`는 원래 모델로 뜨고, 로컬 모델은 `codex --profile qwen-local`로 씁니다.
+- 최신 Codex는 `config.toml` 안의 `[profiles.*]` 섹션을 허용하지 않고 프로필별 별도 파일(`<이름>.config.toml`)을 요구하므로, 이 스크립트는 **`config.toml`을 건드리지 않습니다**. 단, 구버전 스크립트가 config.toml에 심어둔 블록(관리 블록·기본 모델 강제)이 발견되면 백업 후 제거해서 Codex가 다시 시작되게 합니다.
+- 기존 프로필 파일이 있으면 타임스탬프 백업(`*.backup.*`) 후 재생성합니다.
 - `ENABLE_TOOL_CALLS=0`으로 꺼져 있으면 경고를 출력합니다(Codex는 tool calling이 필수).
 - `CODEX_MODEL`/`CODEX_BASE_URL`/`CODEX_PROFILE`/`CODEX_HOME`으로 대상을 바꿀 수 있습니다 — 방법은 "코딩 에이전트 연동 > Codex CLI > 환경 변수로 설정 바꾸기" 참고.
 
@@ -157,7 +157,7 @@ chmod +x *.sh
 ### 3. 시작 / 확인 / 종료
 
 ```bash
-./run-qwen36-27b-fp8.sh     # 서버 시작 → http://localhost:8000/v1, 모델명 qwen3.6-27b
+./run-qwen36-27b-fp8.sh     # 서버 시작 → http://localhost:8000/v1, 모델명 qwen3.6-27b-fp8
 ./health-check.sh       # /v1/models 대기 후 chat completion 확인 (CHAT_CHECK=0으로 생략 가능)
 ./benchmark-smoke.sh    # 스모크 벤치마크 (BENCH_MAX_TOKENS=1024 등으로 조절)
 ./stop-vllm.sh          # 종료 후 nvidia-smi로 GPU 메모리 반환 확인
@@ -170,7 +170,7 @@ from openai import OpenAI
 
 client = OpenAI(base_url="http://localhost:8000/v1", api_key="EMPTY")
 response = client.chat.completions.create(
-    model="qwen3.6-27b",
+    model="qwen3.6-27b-fp8",
     messages=[{"role": "user", "content": "Write a concise Python binary search function."}],
     temperature=0.6,
     top_p=0.95,
@@ -207,7 +207,7 @@ systemctl --user stop vllm-qwen36.service
 | 변수 | 기본값 | 설명 |
 |---|---|---|
 | `MODEL` | `Qwen/Qwen3.6-27B-FP8` | 서빙할 모델의 HuggingFace ID. 처음 실행 시 자동 다운로드됩니다. 다른 모델로 바꾸면 `--reasoning-parser`, `--tool-call-parser`가 그 모델과 호환되는지 확인이 필요합니다. |
-| `SERVED_MODEL_NAME` | `qwen3.6-27b` | API에서 노출되는 모델명. 클라이언트(Codex, OpenAI SDK 등)가 요청에 적는 이름이 이것과 일치해야 합니다. HuggingFace ID를 그대로 쓰기 길어서 짧은 별칭을 붙이는 용도입니다. |
+| `SERVED_MODEL_NAME` | `qwen3.6-27b-fp8` | API에서 노출되는 모델명. 클라이언트(Codex, OpenAI SDK 등)가 요청에 적는 이름이 이것과 일치해야 합니다. HuggingFace ID를 그대로 쓰기 길어서 짧은 별칭을 붙이는 용도입니다. |
 | `HOST` | `0.0.0.0` | 서버가 바인딩할 주소. `0.0.0.0`은 모든 인터페이스에서 접속 허용(같은 네트워크의 다른 기기 포함), `127.0.0.1`은 이 컴퓨터에서만 접속 가능. 외부 공개 시에는 방화벽/인증을 함께 구성하세요. |
 | `PORT` | `8000` | API 포트. 클라이언트는 `http://localhost:8000/v1`로 접속합니다. 다른 프로그램과 충돌하면 변경하세요. |
 | `CUDA_VISIBLE_DEVICES` | `0,1` | 사용할 GPU 번호(nvidia-smi 기준). 예: GPU 1개만 쓰려면 `0`, 2·3번을 쓰려면 `2,3`. |
@@ -253,8 +253,8 @@ systemctl --user stop vllm-qwen36.service
 |---|---|---|
 | `CODEX_MODEL` | `SERVED_MODEL_NAME` 값 | Codex config에 기록할 모델명. 서버의 서빙 이름과 일치해야 Codex 요청이 통합니다. |
 | `CODEX_BASE_URL` | `http://127.0.0.1:$PORT/v1` | Codex가 접속할 서버 주소. 2080 Ti 구성의 llama.cpp(포트 8080)로 보낼 때 바꿉니다. |
-| `CODEX_PROFILE` | `qwen-local` | 로컬 모델을 등록할 프로필 이름. `codex --profile <이름>`으로 선택합니다. Codex 기본 모델은 바뀌지 않습니다. |
-| `CODEX_HOME` | `~/.codex` | `config.toml`을 생성할 디렉터리. Codex 설정 위치를 옮겼을 때만 바꿉니다. |
+| `CODEX_PROFILE` | `qwen-local` | 로컬 모델을 등록할 프로필 이름이자 파일명(`<이름>.config.toml`). `codex --profile <이름>`으로 선택합니다. Codex 기본 모델은 바뀌지 않습니다. |
+| `CODEX_HOME` | `~/.codex` | 프로필 파일을 생성할 디렉터리. Codex 설정 위치를 옮겼을 때만 바꿉니다. |
 
 ## 코딩 에이전트 연동
 
@@ -275,14 +275,14 @@ systemctl --user stop vllm-qwen36.service
 ./run-qwen36-27b-fp8.sh       # 1) 서버 시작 (또는 systemctl --user start vllm-qwen36)
 ./install-codex-config.sh     # 2) 최초 1회: 로컬 서버를 프로필로 등록 (기본 모델은 안 바뀜)
 codex                         # 3a) 원래 기본 모델로 실행 (평소처럼)
-codex --profile qwen-local    # 3b) 로컬 qwen3.6-27b로 실행
+codex --profile qwen-local    # 3b) 로컬 qwen3.6-27b-fp8로 실행
 ```
 
 모델 전환 방법:
 
 - **실행할 때 선택**: `codex --profile qwen-local` (로컬) / 그냥 `codex` (원래 모델). 이게 유일하게 확실한 전환 방법입니다.
 - **세션 중 전환은 안 됩니다** (Codex 0.132 기준 확인): `/model` 목록에 커스텀 프로바이더 모델이 나오지 않으므로, 모델을 바꾸려면 세션을 종료하고 `--profile` 유무를 바꿔 다시 시작하세요.
-- **프로필 없이 1회성 지정**: `codex -m qwen3.6-27b -c model_provider=vllm`
+- **프로필 없이 1회성 지정**: `codex -m qwen3.6-27b-fp8 -c model_provider=vllm`
 
 #### 승인 생략 모드(`--yolo`)로 실행
 
@@ -298,18 +298,18 @@ codex --profile qwen-local --yolo
 alias qcodex='codex --profile qwen-local --yolo'
 ```
 
-> ⚠️ 모델이 묻지 않고 바로 파일을 고치고 명령을 실행하게 되므로, **신뢰하는 작업 폴더에서만** 쓰세요. 참고: config.toml 프로필에 `approval_policy = "never"` / `sandbox_mode = "danger-full-access"`를 넣어 같은 효과를 낼 수도 있지만, `[profiles.qwen-local]` 블록은 `install-codex-config.sh`가 관리해서 재실행 시 덮어써지므로 alias 방식을 권장합니다.
+> ⚠️ 모델이 묻지 않고 바로 파일을 고치고 명령을 실행하게 되므로, **신뢰하는 작업 폴더에서만** 쓰세요. 참고: 프로필 파일에 `approval_policy = "never"` / `sandbox_mode = "danger-full-access"`를 넣어 같은 효과를 낼 수도 있지만, `qwen-local.config.toml`은 `install-codex-config.sh`가 통째로 관리해서 재실행 시 덮어써지므로 alias 방식을 권장합니다.
 
 #### 환경 변수로 설정 바꾸기
 
-`install-codex-config.sh`는 **실행하는 시점에** 아래 변수를 읽어 config.toml을 만듭니다. 즉, 변수를 바꾼 뒤에는 **스크립트를 다시 실행해야** 반영됩니다.
+`install-codex-config.sh`는 **실행하는 시점에** 아래 변수를 읽어 프로필 파일을 만듭니다. 즉, 변수를 바꾼 뒤에는 **스크립트를 다시 실행해야** 반영됩니다.
 
 | 변수 | 기본값 | 의미 |
 |---|---|---|
-| `CODEX_MODEL` | `.env`의 `SERVED_MODEL_NAME` (기본 `qwen3.6-27b`) | config에 기록할 모델명. 서버의 서빙 이름과 일치해야 함 |
+| `CODEX_MODEL` | `.env`의 `SERVED_MODEL_NAME` (기본 `qwen3.6-27b-fp8`) | config에 기록할 모델명. 서버의 서빙 이름과 일치해야 함 |
 | `CODEX_BASE_URL` | `http://127.0.0.1:$PORT/v1` (기본 포트 8000) | Codex가 접속할 서버 주소 |
-| `CODEX_PROFILE` | `qwen-local` | 등록할 프로필 이름 — `codex --profile <이 이름>`으로 로컬 모델 선택 |
-| `CODEX_HOME` | `~/.codex` | config.toml을 쓸 디렉터리 |
+| `CODEX_PROFILE` | `qwen-local` | 프로필 이름이자 파일명(`<이름>.config.toml`) — `codex --profile <이 이름>`으로 로컬 모델 선택 |
+| `CODEX_HOME` | `~/.codex` | 프로필 파일을 쓸 디렉터리 |
 
 바꾸는 방법은 두 가지입니다.
 
@@ -317,7 +317,7 @@ alias qcodex='codex --profile qwen-local --yolo'
 
 ```bash
 # .env 파일에 추가 (편집: nano .env 또는 vi .env)
-CODEX_MODEL=qwen3.6-27b
+CODEX_MODEL=qwen3.6-27b-fp8
 CODEX_BASE_URL=http://127.0.0.1:8000/v1
 ```
 
@@ -332,22 +332,20 @@ CODEX_BASE_URL=http://127.0.0.1:8000/v1
 CODEX_MODEL=qwen3-coder-30b-a3b CODEX_BASE_URL=http://127.0.0.1:8080/v1 ./install-codex-config.sh
 ```
 
-생성 결과는 `~/.codex/config.toml`에서 확인할 수 있습니다. 스크립트는 아래 마커로 감싼 **관리 블록만** 갱신하고 나머지 내용(개인 설정)은 보존합니다 — 관리 블록 바깥은 자유롭게 수정해도 되고, 블록 안은 스크립트 재실행 시 덮어써집니다:
+생성 결과는 프로필 파일 **`~/.codex/qwen-local.config.toml`**입니다. 최신 Codex는 프로필을 `config.toml` 안이 아니라 프로필별 별도 파일로 요구하며, `codex --profile qwen-local`로 실행하면 이 파일이 `config.toml` 위에 오버레이됩니다. 파일 전체를 스크립트가 관리하므로 직접 수정한 내용은 재실행 시 덮어써집니다(타임스탬프 백업은 남음):
 
 ```toml
-# --- vllm-setting managed block (installed by install-codex-config.sh) ---
+# Managed by vllm-setting/install-codex-config.sh — rerun it to regenerate.
+model = "qwen3.6-27b-fp8"
+model_provider = "vllm"
+
 [model_providers.vllm]
-name = "vLLM local (qwen3.6-27b)"
+name = "vLLM local (qwen3.6-27b-fp8)"
 base_url = "http://127.0.0.1:8000/v1"
 wire_api = "responses"
-
-[profiles.qwen-local]
-model = "qwen3.6-27b"
-model_provider = "vllm"
-# --- end vllm-setting managed block ---
 ```
 
-최상위 `model` 키를 쓰지 않으므로 Codex의 기본 모델은 그대로입니다.
+`config.toml`은 건드리지 않으므로 Codex의 기본 모델은 그대로입니다. 구버전 스크립트가 config.toml 안에 넣어둔 프로필 블록 때문에 Codex가 "config.toml 안의 프로필은 지원되지 않는다"는 에러를 낸다면, 이 스크립트를 다시 실행하세요 — 백업 후 해당 블록을 제거하고 별도 파일로 옮겨줍니다.
 
 > ⚠️ **`wire_api`는 `"responses"`여야 합니다.** Codex 0.132부터 `wire_api = "chat"`(Chat Completions 방식)이 제거돼 config에 남아 있으면 `wire_api = "chat" is no longer supported` 에러가 납니다. 예전 버전 스크립트로 등록했다면 `./install-codex-config.sh`를 다시 실행하면 갱신됩니다. 대신 서버 쪽 vLLM이 Responses API(`/v1/responses`)를 지원해야 하므로, 요청이 404로 실패하면 vLLM을 최신으로 업그레이드하세요(`uv pip install -U vllm`).
 
@@ -364,9 +362,9 @@ pip install 'litellm[proxy]'
 ```yaml
 # litellm_config.yaml
 model_list:
-  - model_name: qwen3.6-27b
+  - model_name: qwen3.6-27b-fp8
     litellm_params:
-      model: hosted_vllm/qwen3.6-27b
+      model: hosted_vllm/qwen3.6-27b-fp8
       api_base: http://localhost:8000/v1
 ```
 
@@ -383,8 +381,8 @@ litellm --config litellm_config.yaml --port 4000
   "env": {
     "ANTHROPIC_BASE_URL": "http://localhost:4000",
     "ANTHROPIC_AUTH_TOKEN": "dummy",
-    "ANTHROPIC_MODEL": "qwen3.6-27b",
-    "ANTHROPIC_SMALL_FAST_MODEL": "qwen3.6-27b"
+    "ANTHROPIC_MODEL": "qwen3.6-27b-fp8",
+    "ANTHROPIC_SMALL_FAST_MODEL": "qwen3.6-27b-fp8"
   }
 }
 ```
@@ -394,8 +392,8 @@ litellm --config litellm_config.yaml --port 4000
 ```bash
 export ANTHROPIC_BASE_URL="http://localhost:4000"
 export ANTHROPIC_AUTH_TOKEN="dummy"
-export ANTHROPIC_MODEL="qwen3.6-27b"
-export ANTHROPIC_SMALL_FAST_MODEL="qwen3.6-27b"
+export ANTHROPIC_MODEL="qwen3.6-27b-fp8"
+export ANTHROPIC_SMALL_FAST_MODEL="qwen3.6-27b-fp8"
 claude
 ```
 

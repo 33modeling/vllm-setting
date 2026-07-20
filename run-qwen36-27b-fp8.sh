@@ -20,7 +20,7 @@ if [[ -f "$SCRIPT_DIR/.env" ]]; then
 fi
 
 MODEL="${MODEL:-Qwen/Qwen3.6-27B-FP8}"
-SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-qwen3.6-27b}"
+SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-qwen3.6-27b-fp8}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8000}"
 PID_FILE="${PID_FILE:-$SCRIPT_DIR/vllm.pid}"
