@@ -184,18 +184,63 @@ systemctl --user stop vllm-qwen36.service
 
 ### Codex CLI 연동
 
-Codex CLI가 이 서버를 쓰게 하려면 `.env`에 `ENABLE_TOOL_CALLS=1`을 설정한 상태에서:
+기본 사용 흐름 — vLLM으로 qwen3.6-27b를 띄운 뒤 Codex를 붙입니다 (`.env`에 `ENABLE_TOOL_CALLS=1` 필요):
 
 ```bash
-./install-codex-config.sh   # ~/.codex/config.toml 생성 (기존 파일은 타임스탬프 백업)
-codex                       # 로컬 qwen3.6-27b로 실행
+./run-qwen36-27b.sh         # 1) 서버 시작 (또는 systemctl --user start vllm-qwen36)
+./install-codex-config.sh   # 2) 최초 1회: ~/.codex/config.toml 생성 (기존 파일은 타임스탬프 백업)
+codex                       # 3) qwen3.6-27b가 기본 모델로 바로 실행됨
 ```
+
+생성된 config가 `model = "qwen3.6-27b"` + `model_provider = "vllm"`을 기본값으로 잡으므로 실행 즉시 로컬 모델을 사용합니다. 세션 중 모델 확인·전환은 `/model` 명령으로 합니다(같은 프로바이더 안에서 서빙 이름 기준).
 
 다른 서버(예: 2080 Ti 구성의 llama.cpp, 포트 8080)를 쓰려면 오버라이드합니다:
 
 ```bash
 CODEX_MODEL=qwen3-coder-30b-a3b CODEX_BASE_URL=http://127.0.0.1:8080/v1 ./install-codex-config.sh
 ```
+
+### Claude Code 연동
+
+Claude Code는 Anthropic Messages API(`/v1/messages`) 형식으로 통신하므로, OpenAI 호환 엔드포인트인 이 서버에 바로 붙일 수 없고 LiteLLM 프록시를 변환 계층으로 둡니다.
+
+```bash
+pip install 'litellm[proxy]'
+```
+
+```yaml
+# litellm_config.yaml
+model_list:
+  - model_name: qwen3.6-27b
+    litellm_params:
+      model: hosted_vllm/qwen3.6-27b
+      api_base: http://localhost:8000/v1
+```
+
+```bash
+litellm --config litellm_config.yaml --port 4000
+```
+
+프록시가 뜨면 Claude Code를 이렇게 실행합니다:
+
+```bash
+export ANTHROPIC_BASE_URL="http://localhost:4000"
+export ANTHROPIC_AUTH_TOKEN="dummy"
+export ANTHROPIC_MODEL="qwen3.6-27b"
+export ANTHROPIC_SMALL_FAST_MODEL="qwen3.6-27b"
+claude
+```
+
+환경변수는 `~/.claude/settings.json`의 `"env"` 블록에 넣어도 됩니다.
+
+참고: 최근 vLLM은 Anthropic 호환 `/v1/messages` 엔드포인트를 자체 지원하기 시작했습니다. 서버 실행 후 `curl -s localhost:8000/v1/messages`가 404가 아니면, LiteLLM 없이 `ANTHROPIC_BASE_URL=http://localhost:8000`으로 직결할 수 있습니다.
+
+### 코딩 에이전트 공통 주의사항 (Codex / Claude Code)
+
+- **`ENABLE_TOOL_CALLS=1` 필수.** 코딩 에이전트는 파일 편집·명령 실행을 전부 tool calling으로 수행하므로, `.env`에서 이 값을 켜고 서버를 재시작해야 합니다. 기본값은 `0`입니다.
+- **`MAX_NUM_SEQS=2~4` 권장.** Claude Code는 본 요청 외에 백그라운드 요청(세션 제목 생성, 서브에이전트 등)을 병렬로 보냅니다. 기본값 `1`이면 이 요청들이 직렬 대기하므로 에이전트 용도에서는 2~4가 낫습니다. prefix caching이 켜져 있어 KV cache 부담은 크지 않습니다.
+- **컨텍스트는 넉넉하게.** 에이전트의 시스템 프롬프트 + 도구 정의만으로 수만 토큰을 차지하므로 64K 이상(가능하면 `./use-profile.sh 128k`)을 권장합니다.
+- 웹 검색 같은 Anthropic 서버사이드 기능은 커스텀 백엔드에서 동작하지 않습니다.
 
 ### 2080 Ti 구성 (qwen3-coder-2080ti/)
 
@@ -235,7 +280,7 @@ OOM이면 llama.cpp는 `LLAMA_CTX_SIZE=8192` → `LLAMA_TENSOR_SPLIT=0.45,0.55`(
 
 ## 컨텍스트 튜닝 노트
 
-- 기본 `MAX_MODEL_LEN=65536`은 2x24GB에서 안정성을 우선한 값입니다. 1인 사용이므로 `MAX_NUM_SEQS=1`로 KV cache를 한 세션에 몰아줍니다.
+- 기본 `MAX_MODEL_LEN=65536`은 2x24GB에서 안정성을 우선한 값입니다. 1인 사용이므로 `MAX_NUM_SEQS=1`로 KV cache를 한 세션에 몰아줍니다. 단, Claude Code처럼 백그라운드 요청을 병렬로 보내는 에이전트를 붙일 때는 `MAX_NUM_SEQS=2~4`가 낫습니다(위 "코딩 에이전트 공통 주의사항" 참고).
 - Qwen3.6-27B는 하이브리드 어텐션(레이어 4개 중 1개만 full attention)이라 KV cache가 토큰당 약 64KB로 작아, 128K도 bf16 KV(`KV_CACHE_DTYPE=auto`) 그대로 여유 있게 들어갑니다. `fp8` KV는 이 모델에서는 메모리상 불필요하고 품질을 약간 깎을 수 있어 쓰지 않습니다.
 - OOM이 나면 `MAX_MODEL_LEN`을 `98304` 또는 `65536`으로 낮추는 쪽이 가장 효과적입니다.
 - `--enable-prefix-caching`: 같은 repo/context를 반복 투입하는 코딩 에이전트 워크로드에 유리합니다.
