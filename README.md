@@ -40,6 +40,12 @@
 - `systemd/vllm-qwen36.service.in` 템플릿의 `__WORKDIR__`을 현재 체크아웃 경로로 치환해 `~/.config/systemd/user/vllm-qwen36.service`로 설치하고 enable까지 수행합니다.
 - 서비스는 `ExecStart`에 run 스크립트, `ExecStop`에 stop 스크립트를 사용하며 `Restart=on-failure`입니다.
 
+### Codex CLI 연동 (`install-codex-config.sh`)
+
+- `.env`의 `SERVED_MODEL_NAME`/`PORT`를 읽어 `~/.codex/config.toml`을 생성하고, Codex CLI가 로컬 vLLM 서버를 기본 모델로 쓰게 합니다.
+- 기존 config.toml은 타임스탬프 백업(`config.toml.backup.*`) 후 교체합니다. `CODEX_MODEL`/`CODEX_BASE_URL`/`CODEX_HOME`으로 대상을 오버라이드할 수 있습니다.
+- `.env`에 `ENABLE_TOOL_CALLS=1`이 아니면 경고를 출력합니다(Codex는 tool calling이 필수).
+
 ### 2080 Ti 서브 구성 (`qwen3-coder-2080ti/`)
 
 - `install-llama-cpp.sh`: llama.cpp를 clone하고 CUDA(SM 7.5)로 `llama-server`/`llama-cli`를 빌드합니다.
@@ -58,6 +64,7 @@ vllm-setting/
 ├── benchmark-smoke.sh         # 코딩 프롬프트 3종 성능 스모크 테스트
 ├── use-profile.sh             # profiles/*.env를 .env로 활성화(백업 포함)
 ├── install-systemd-user.sh    # systemd --user 서비스 설치
+├── install-codex-config.sh    # Codex CLI용 ~/.codex/config.toml 생성
 ├── .env.example               # 루트 구성 설정 예시
 ├── profiles/
 │   ├── 64k.env                # 안정 기본 프로필 (MAX_MODEL_LEN=65536)
@@ -174,6 +181,21 @@ systemctl --user stop vllm-qwen36.service
 ```
 
 부팅 후 자동 시작에는 환경에 따라 linger가 필요할 수 있습니다: `loginctl enable-linger "$USER"`.
+
+### Codex CLI 연동
+
+Codex CLI가 이 서버를 쓰게 하려면 `.env`에 `ENABLE_TOOL_CALLS=1`을 설정한 상태에서:
+
+```bash
+./install-codex-config.sh   # ~/.codex/config.toml 생성 (기존 파일은 타임스탬프 백업)
+codex                       # 로컬 qwen3.6-27b로 실행
+```
+
+다른 서버(예: 2080 Ti 구성의 llama.cpp, 포트 8080)를 쓰려면 오버라이드합니다:
+
+```bash
+CODEX_MODEL=qwen3-coder-30b-a3b CODEX_BASE_URL=http://127.0.0.1:8080/v1 ./install-codex-config.sh
+```
 
 ### 2080 Ti 구성 (qwen3-coder-2080ti/)
 
