@@ -17,7 +17,7 @@
 
 ```text
 vllm-setting/
-├── run-qwen36-27b.sh          # vLLM 실행 (2x 4090, Qwen3.6-27B-FP8)
+├── run-qwen36-27b-fp8.sh          # vLLM 실행 (2x 4090, Qwen3.6-27B-FP8)
 ├── stop-vllm.sh               # vLLM 프로세스 트리 종료 및 GPU 반환
 ├── health-check.sh            # /v1/models + chat completion 확인
 ├── benchmark-smoke.sh         # 코딩 프롬프트 3종 성능 스모크 테스트
@@ -52,7 +52,7 @@ flowchart TD
     P128["profiles/128k.env"] --> UP
     EX[".env.example (cp)"] --> ENV[".env"]
     UP --> ENV
-    ENV --> RUN["run-qwen36-27b.sh"]
+    ENV --> RUN["run-qwen36-27b-fp8.sh"]
     ENV --> STOP["stop-vllm.sh"]
     ENV --> HC["health-check.sh"]
     ENV --> BM["benchmark-smoke.sh"]
@@ -73,7 +73,7 @@ flowchart TD
 
 ## 스크립트 안내
 
-### `run-qwen36-27b.sh` — vLLM 서버 실행
+### `run-qwen36-27b-fp8.sh` — vLLM 서버 실행
 
 - `.env`가 있으면 로드한 뒤 `vllm serve`를 exec으로 실행합니다. 기본값: 모델 `Qwen/Qwen3.6-27B-FP8`, 서빙 이름 `qwen3.6-27b`, `PORT=8000`, `TP_SIZE=2`, `MAX_MODEL_LEN=65536`, `MAX_NUM_SEQS=2`.
 - 1인 코딩용 플래그가 기본 적용됩니다: `--enable-prefix-caching`, `--enable-chunked-prefill`, `--disable-custom-all-reduce`, `--reasoning-parser qwen3`, `--language-model-only`(이미지 입력 미사용).
@@ -144,7 +144,7 @@ chmod +x *.sh
 ### 3. 시작 / 확인 / 종료
 
 ```bash
-./run-qwen36-27b.sh     # 서버 시작 → http://localhost:8000/v1, 모델명 qwen3.6-27b
+./run-qwen36-27b-fp8.sh     # 서버 시작 → http://localhost:8000/v1, 모델명 qwen3.6-27b
 ./health-check.sh       # /v1/models 대기 후 chat completion 확인 (CHAT_CHECK=0으로 생략 가능)
 ./benchmark-smoke.sh    # 스모크 벤치마크 (BENCH_MAX_TOKENS=1024 등으로 조절)
 ./stop-vllm.sh          # 종료 후 nvidia-smi로 GPU 메모리 반환 확인
@@ -187,7 +187,7 @@ systemctl --user stop vllm-qwen36.service
 
 ## `.env` 설정 레퍼런스
 
-`.env`는 레포 루트에 두는 **로컬 전용** 설정 파일입니다. `cp .env.example .env`로 만들며, 컴퓨터마다 값이 다르므로 `.gitignore`에 등록돼 Git에는 올라가지 않습니다. 모든 스크립트는 시작할 때 이 파일을 읽고, 파일이나 항목이 없으면 아래 기본값으로 동작합니다. **값을 바꾸면 서버를 재시작해야 반영됩니다**: `./stop-vllm.sh && ./run-qwen36-27b.sh`.
+`.env`는 레포 루트에 두는 **로컬 전용** 설정 파일입니다. `cp .env.example .env`로 만들며, 컴퓨터마다 값이 다르므로 `.gitignore`에 등록돼 Git에는 올라가지 않습니다. 모든 스크립트는 시작할 때 이 파일을 읽고, 파일이나 항목이 없으면 아래 기본값으로 동작합니다. **값을 바꾸면 서버를 재시작해야 반영됩니다**: `./stop-vllm.sh && ./run-qwen36-27b-fp8.sh`.
 
 ### 모델·서버 기본
 
@@ -247,7 +247,7 @@ systemctl --user stop vllm-qwen36.service
 
 ### 참고: tool calling은 기본으로 켜져 있음
 
-코딩 에이전트는 파일 편집·명령 실행을 전부 **tool calling**(모델이 작업 지시를 일반 텍스트가 아닌 구조화된 함수 호출로 응답하는 기능)으로 수행합니다. 이 레포는 기본값으로 이 기능이 켜져 있어서 — `run-qwen36-27b.sh`가 `vllm serve`에 `--enable-auto-tool-choice --tool-call-parser qwen3_coder` 옵션을 자동으로 붙입니다 — 별도 설정 없이 서버만 띄우면 됩니다.
+코딩 에이전트는 파일 편집·명령 실행을 전부 **tool calling**(모델이 작업 지시를 일반 텍스트가 아닌 구조화된 함수 호출로 응답하는 기능)으로 수행합니다. 이 레포는 기본값으로 이 기능이 켜져 있어서 — `run-qwen36-27b-fp8.sh`가 `vllm serve`에 `--enable-auto-tool-choice --tool-call-parser qwen3_coder` 옵션을 자동으로 붙입니다 — 별도 설정 없이 서버만 띄우면 됩니다.
 
 - 이 스위치(`ENABLE_TOOL_CALLS`)는 vLLM **서버** 쪽 설정입니다. Codex/Claude Code 클라이언트 설정(`~/.codex/config.toml` 등)과는 무관합니다.
 - tool을 쓰지 않는 일반 채팅 요청에는 영향이 없으므로 켜둬도 무방합니다. 끄고 싶을 때만 `.env`에 `ENABLE_TOOL_CALLS=0`을 넣고 서버를 재시작합니다.
@@ -257,7 +257,7 @@ systemctl --user stop vllm-qwen36.service
 기본 사용 흐름 — vLLM으로 qwen3.6-27b를 띄운 뒤 Codex를 붙입니다:
 
 ```bash
-./run-qwen36-27b.sh         # 1) 서버 시작 (또는 systemctl --user start vllm-qwen36)
+./run-qwen36-27b-fp8.sh         # 1) 서버 시작 (또는 systemctl --user start vllm-qwen36)
 ./install-codex-config.sh   # 2) 최초 1회: ~/.codex/config.toml 생성 (기존 파일은 타임스탬프 백업)
 codex                       # 3) qwen3.6-27b가 기본 모델로 바로 실행됨
 ```
