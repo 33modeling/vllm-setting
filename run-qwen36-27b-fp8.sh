@@ -6,6 +6,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
+if [[ -f "$SCRIPT_DIR/.env" && ! -r "$SCRIPT_DIR/.env" ]]; then
+  echo "ERROR: $SCRIPT_DIR/.env exists but is not readable by user '$(id -un)'." >&2
+  echo "       Fix permissions (chmod 644 .env) or run as the file owner." >&2
+  exit 1
+fi
+
 if [[ -f "$SCRIPT_DIR/.env" ]]; then
   set -a
   # shellcheck source=/dev/null
@@ -34,6 +40,63 @@ ENABLE_CHUNKED_PREFILL="${ENABLE_CHUNKED_PREFILL:-1}"
 DISABLE_CUSTOM_ALL_REDUCE="${DISABLE_CUSTOM_ALL_REDUCE:-1}"
 ENABLE_TOOL_CALLS="${ENABLE_TOOL_CALLS:-1}"
 TRUST_REMOTE_CODE="${TRUST_REMOTE_CODE:-0}"
+
+# --- Preflight checks: fail fast with actionable messages -------------------
+
+# 1) vllm executable: VLLM_BIN override > PATH > repo-local .venv.
+if [[ -n "${VLLM_BIN:-}" ]]; then
+  if [[ ! -x "$VLLM_BIN" ]]; then
+    echo "ERROR: VLLM_BIN='$VLLM_BIN' does not exist or is not executable." >&2
+    exit 1
+  fi
+elif command -v vllm >/dev/null 2>&1; then
+  VLLM_BIN="$(command -v vllm)"
+elif [[ -x "$SCRIPT_DIR/.venv/bin/vllm" ]]; then
+  VLLM_BIN="$SCRIPT_DIR/.venv/bin/vllm"
+else
+  cat >&2 <<'ERR'
+ERROR: 'vllm' executable not found.
+  Searched: PATH, ./.venv/bin/vllm
+  vLLM may not be installed on this machine. Install it first (see README):
+    uv venv && source .venv/bin/activate && uv pip install -U vllm --torch-backend=auto
+  Or point VLLM_BIN at an existing install:
+    VLLM_BIN=/path/to/venv/bin/vllm ./run-qwen36-27b-fp8.sh
+ERR
+  exit 1
+fi
+
+# 2) GPUs: need a driver and at least as many GPUs as CUDA_VISIBLE_DEVICES/TP_SIZE.
+if ! command -v nvidia-smi >/dev/null 2>&1; then
+  echo "ERROR: nvidia-smi not found — no NVIDIA driver on this machine?" >&2
+  echo "       This config targets 2x RTX 4090; run it on the GPU server." >&2
+  exit 1
+fi
+gpu_count="$(nvidia-smi --list-gpus 2>/dev/null | wc -l)"
+IFS=',' read -ra requested_gpus <<< "$CUDA_VISIBLE_DEVICES"
+if (( gpu_count < ${#requested_gpus[@]} )) || (( gpu_count < TP_SIZE )); then
+  echo "ERROR: not enough GPUs: found $gpu_count, need ${#requested_gpus[@]}" \
+       "(CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES, TP_SIZE=$TP_SIZE)." >&2
+  echo "       This config targets 2x RTX 4090 — is this the right machine?" >&2
+  exit 1
+fi
+
+# 3) MODEL: a local path must exist; a HuggingFace ID is downloaded on first run.
+if [[ "$MODEL" == /* || "$MODEL" == ./* ]]; then
+  if [[ ! -e "$MODEL" ]]; then
+    echo "ERROR: MODEL points to a local path that does not exist: $MODEL" >&2
+    echo "       Fix MODEL in .env, or use a HuggingFace ID to auto-download." >&2
+    exit 1
+  fi
+fi
+
+# 4) Port must be free.
+if ss -tln 2>/dev/null | awk '{print $4}' | grep -q ":$PORT\$"; then
+  echo "ERROR: port $PORT is already in use — is another server running?" >&2
+  echo "       Stop it with ./stop-vllm.sh or change PORT in .env." >&2
+  exit 1
+fi
+
+# ----------------------------------------------------------------------------
 
 args=(
   serve "$MODEL"
@@ -84,7 +147,8 @@ Starting vLLM
   gpu memory utilization: $GPU_MEMORY_UTILIZATION
   kv cache dtype:         $KV_CACHE_DTYPE
   pid file:               $PID_FILE
+  vllm bin:               $VLLM_BIN
 EOF
 
 echo "$$" > "$PID_FILE"
-exec vllm "${args[@]}" "$@"
+exec "$VLLM_BIN" "${args[@]}" "$@"

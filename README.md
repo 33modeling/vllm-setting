@@ -78,6 +78,7 @@ flowchart TD
 - `.env`가 있으면 로드한 뒤 `vllm serve`를 exec으로 실행합니다. 기본값: 모델 `Qwen/Qwen3.6-27B-FP8`, 서빙 이름 `qwen3.6-27b`, `PORT=8000`, `TP_SIZE=2`, `MAX_MODEL_LEN=65536`, `MAX_NUM_SEQS=2`.
 - 1인 코딩용 플래그가 기본 적용됩니다: `--enable-prefix-caching`, `--enable-chunked-prefill`, `--disable-custom-all-reduce`, `--reasoning-parser qwen3`, `--language-model-only`(이미지 입력 미사용).
 - tool calling이 기본으로 켜져 있습니다(`ENABLE_TOOL_CALLS` 기본 `1`): `--enable-auto-tool-choice --tool-call-parser qwen3_coder`를 추가합니다. `.env`에 `ENABLE_TOOL_CALLS=0`을 넣으면 꺼집니다.
+- **실행 전 사전 점검(preflight)**: ① vllm 실행파일(`VLLM_BIN` 지정 → PATH → `./.venv/bin/vllm` 순으로 탐색) ② GPU 개수(`CUDA_VISIBLE_DEVICES`/`TP_SIZE` 충족 여부) ③ `MODEL`이 로컬 경로일 때 존재 여부 ④ 포트 사용 중 여부를 확인하고, 하나라도 안 맞으면 원인과 해결 방법을 에러로 출력한 뒤 중단합니다. 사양이 다른 머신에서 실행했을 때 바로 알 수 있습니다.
 - 시작 시 자신의 PID를 `vllm.pid`에 기록합니다.
 
 ### `stop-vllm.sh` — 안전한 종료
@@ -126,15 +127,26 @@ uv pip install -U vllm --torch-backend=auto
 
 `uv`를 쓰지 않는 환경이면 `pip install -U vllm`로 설치해도 됩니다.
 
-### 2. 최초 설정
+### 2. 최초 설정 (머신마다 새로 해야 함)
+
+> ⚠️ **레포의 기본값은 2x RTX 4090 서버 기준입니다.** `.env`는 Git에 올라가지 않는 머신별 로컬 파일이므로, 이 레포를 clone한 컴퓨터마다 아래 설정을 **그 머신 사양에 맞게 새로** 해야 합니다. 사양이 안 맞는 채로 실행하면 run 스크립트의 사전 점검이 원인을 에러로 알려줍니다(예: GPU 부족, vLLM 미설치).
 
 ```bash
-cd /home/kms/dev/vllm-setting
+cd vllm-setting
 cp .env.example .env
 chmod +x *.sh
 ```
 
-필요하면 `.env`에서 GPU 번호(`CUDA_VISIBLE_DEVICES`), 포트(`PORT`), 컨텍스트 길이(`MAX_MODEL_LEN`)를 수정합니다. 설정 가능한 전체 항목과 각 항목의 의미는 아래 "`.env` 설정 레퍼런스" 참고. 프로필을 바로 쓰려면:
+머신마다 확인·조정할 항목:
+
+| 항목 | 확인할 것 |
+|---|---|
+| `CUDA_VISIBLE_DEVICES`, `TP_SIZE` | 이 머신의 GPU 개수·번호와 일치하는지 (`nvidia-smi`로 확인) |
+| `MODEL`, `MAX_MODEL_LEN` | 이 머신 VRAM에 모델이 들어가는지 (기본 27B-FP8은 48GB급 필요) |
+| `PORT`, `HOST` | 포트 충돌 여부, 외부 접속 허용 여부 |
+| vLLM 설치 | 위 "1. 설치"대로 레포 안 `.venv`에 설치했으면 자동 인식. 다른 위치에 있으면 `VLLM_BIN=/경로/bin/vllm`으로 지정 |
+
+설정 가능한 전체 항목과 각 항목의 의미는 아래 "`.env` 설정 레퍼런스" 참고. 프로필을 바로 쓰려면:
 
 ```bash
 ./use-profile.sh 64k    # 안정 기본값 (65536)
@@ -187,7 +199,7 @@ systemctl --user stop vllm-qwen36.service
 
 ## `.env` 설정 레퍼런스
 
-`.env`는 레포 루트에 두는 **로컬 전용** 설정 파일입니다. `cp .env.example .env`로 만들며, 컴퓨터마다 값이 다르므로 `.gitignore`에 등록돼 Git에는 올라가지 않습니다. 모든 스크립트는 시작할 때 이 파일을 읽고, 파일이나 항목이 없으면 아래 기본값으로 동작합니다. **값을 바꾸면 서버를 재시작해야 반영됩니다**: `./stop-vllm.sh && ./run-qwen36-27b-fp8.sh`.
+`.env`는 레포 루트에 두는 **로컬 전용** 설정 파일입니다. `cp .env.example .env`로 만들며, 컴퓨터마다 값이 다르므로 `.gitignore`에 등록돼 Git에는 올라가지 않습니다. 모든 스크립트는 시작할 때 이 파일을 읽고, 파일이나 항목이 없으면 아래 기본값으로 동작합니다. **아래 기본값은 2x RTX 4090 서버 기준**이므로 다른 머신에서는 그대로 쓸 수 없고, "실행 가이드 > 2. 최초 설정"의 항목별 점검대로 머신마다 새로 맞춰야 합니다. **값을 바꾸면 서버를 재시작해야 반영됩니다**: `./stop-vllm.sh && ./run-qwen36-27b-fp8.sh`.
 
 ### 모델·서버 기본
 
@@ -201,6 +213,7 @@ systemctl --user stop vllm-qwen36.service
 | `TP_SIZE` | `2` | 텐서 병렬 크기 — 모델을 몇 장의 GPU에 나눠 올릴지. `CUDA_VISIBLE_DEVICES`의 GPU 개수와 일치해야 합니다. |
 | `DTYPE` | `auto` | 모델 가중치 연산 자료형. `auto`면 모델 설정을 따릅니다(FP8 모델은 FP8). 보통 바꿀 일 없습니다. |
 | `PID_FILE` | `레포/vllm.pid` | 서버 프로세스 ID를 기록할 파일 경로. `stop-vllm.sh`가 종료 대상을 찾을 때 씁니다. 바꿀 일 거의 없습니다. |
+| `VLLM_BIN` | (자동 탐색) | vllm 실행파일 경로. 지정하지 않으면 PATH → 레포 안 `./.venv/bin/vllm` 순으로 찾습니다. vLLM을 다른 가상환경에 설치했다면 `VLLM_BIN=/그/경로/bin/vllm`으로 지정하세요. |
 
 ### 메모리·컨텍스트
 
