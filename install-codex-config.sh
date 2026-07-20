@@ -87,7 +87,9 @@ $MARK_BEGIN
 [model_providers.vllm]
 name = "vLLM local ($CODEX_MODEL)"
 base_url = "$CODEX_BASE_URL"
-wire_api = "chat"
+# Codex >= 0.132 dropped wire_api = "chat"; requires the Responses API.
+# The vLLM server must expose /v1/responses (recent vLLM versions do).
+wire_api = "responses"
 
 [profiles.$CODEX_PROFILE]
 model = "$CODEX_MODEL"

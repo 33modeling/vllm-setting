@@ -323,7 +323,7 @@ CODEX_MODEL=qwen3-coder-30b-a3b CODEX_BASE_URL=http://127.0.0.1:8080/v1 ./instal
 [model_providers.vllm]
 name = "vLLM local (qwen3.6-27b)"
 base_url = "http://127.0.0.1:8000/v1"
-wire_api = "chat"
+wire_api = "responses"
 
 [profiles.qwen-local]
 model = "qwen3.6-27b"
@@ -332,6 +332,8 @@ model_provider = "vllm"
 ```
 
 최상위 `model` 키를 쓰지 않으므로 Codex의 기본 모델은 그대로입니다.
+
+> ⚠️ **`wire_api`는 `"responses"`여야 합니다.** Codex 0.132부터 `wire_api = "chat"`(Chat Completions 방식)이 제거돼 config에 남아 있으면 `wire_api = "chat" is no longer supported` 에러가 납니다. 예전 버전 스크립트로 등록했다면 `./install-codex-config.sh`를 다시 실행하면 갱신됩니다. 대신 서버 쪽 vLLM이 Responses API(`/v1/responses`)를 지원해야 하므로, 요청이 404로 실패하면 vLLM을 최신으로 업그레이드하세요(`uv pip install -U vllm`).
 
 ### Claude Code
 
