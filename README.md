@@ -280,9 +280,25 @@ codex --profile qwen-local    # 3b) 로컬 qwen3.6-27b로 실행
 
 모델 전환 방법:
 
-- **실행할 때 선택**: `codex --profile qwen-local` (로컬) / 그냥 `codex` (원래 모델). 이게 가장 확실한 전환 방법입니다.
-- **세션 중 확인·변경**: `/model` 명령. 단, `/model` 목록에 커스텀 프로바이더 모델이 나오는지는 Codex 버전에 따라 다르므로, 안 보이면 세션을 `--profile`로 다시 시작하세요.
+- **실행할 때 선택**: `codex --profile qwen-local` (로컬) / 그냥 `codex` (원래 모델). 이게 유일하게 확실한 전환 방법입니다.
+- **세션 중 전환은 안 됩니다** (Codex 0.132 기준 확인): `/model` 목록에 커스텀 프로바이더 모델이 나오지 않으므로, 모델을 바꾸려면 세션을 종료하고 `--profile` 유무를 바꿔 다시 시작하세요.
 - **프로필 없이 1회성 지정**: `codex -m qwen3.6-27b -c model_provider=vllm`
+
+#### 승인 생략 모드(`--yolo`)로 실행
+
+`--yolo`(= `--dangerously-bypass-approvals-and-sandbox`)는 파일 수정·명령 실행 때마다 뜨는 승인 프롬프트를 생략하고 샌드박스도 해제합니다. 프로필 플래그와 나란히 붙이면 됩니다:
+
+```bash
+codex --profile qwen-local --yolo
+```
+
+매번 치기 귀찮으면 셸 alias로 등록하세요 (`~/.bashrc`에 추가):
+
+```bash
+alias qcodex='codex --profile qwen-local --yolo'
+```
+
+> ⚠️ 모델이 묻지 않고 바로 파일을 고치고 명령을 실행하게 되므로, **신뢰하는 작업 폴더에서만** 쓰세요. 참고: config.toml 프로필에 `approval_policy = "never"` / `sandbox_mode = "danger-full-access"`를 넣어 같은 효과를 낼 수도 있지만, `[profiles.qwen-local]` 블록은 `install-codex-config.sh`가 관리해서 재실행 시 덮어써지므로 alias 방식을 권장합니다.
 
 #### 환경 변수로 설정 바꾸기
 
