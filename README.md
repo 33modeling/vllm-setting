@@ -122,6 +122,8 @@ flowchart TD
 - OpenCode는 OpenAI 호환(Chat Completions) 방식으로 붙으므로 Codex와 달리 vLLM의 `/v1/responses` 지원이 필요 없습니다.
 - `OPENCODE_MODEL`/`OPENCODE_BASE_URL`/`OPENCODE_PROVIDER`/`OPENCODE_CONFIG`로 대상을 바꿀 수 있습니다(JSON 병합에 python3 필요).
 
+## 실행 가이드
+
 ### 1. 설치 (vLLM이 없는 경우)
 
 별도 Python 가상환경에서 설치합니다.
