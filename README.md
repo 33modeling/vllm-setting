@@ -191,9 +191,16 @@ Codex CLI와 Claude Code 모두 공통 전제는 두 가지입니다: **서버�
 
 ### 사전 준비: `ENABLE_TOOL_CALLS=1` 켜기
 
-코딩 에이전트는 파일 편집·명령 실행을 전부 tool calling으로 수행하는데, 이 레포의 기본값은 `ENABLE_TOOL_CALLS=0`(꺼짐)입니다. 켜지 않으면 에이전트가 아무 작업도 못 합니다.
+**이게 뭔가:** `ENABLE_TOOL_CALLS`는 Codex나 Claude Code의 설정이 **아니라**, 이 레포가 정의한 **vLLM 서버 쪽 스위치**입니다. 클라이언트/서버 설정은 완전히 분리돼 있습니다:
 
-**어디서:** 레포 루트의 `.env` 파일입니다 (`/home/kms/dev/vllm-setting/.env` — 최초 설정 때 `cp .env.example .env`로 만든 파일). 스크립트나 셸 환경 변수가 아니라 이 파일을 수정합니다.
+| 쪽 | 설정 파일 | 무엇을 정하나 |
+|---|---|---|
+| Codex (클라이언트) | `~/.codex/config.toml` | 어느 서버에 접속할지, 어떤 모델명을 쓸지 |
+| vLLM 서버 (이 레포) | 레포 루트 `.env` | 서버를 어떤 옵션으로 띄울지 — `ENABLE_TOOL_CALLS`는 여기 |
+
+**왜 필요한가:** `run-qwen36-27b.sh`가 서버를 시작할 때 `.env`를 읽고, `ENABLE_TOOL_CALLS=1`이면 `vllm serve`에 `--enable-auto-tool-choice --tool-call-parser qwen3_coder` 옵션을 붙입니다. 이 옵션이 있어야 vLLM이 tool calling — 모델이 "파일을 읽어라, 명령을 실행해라"를 일반 텍스트가 아닌 구조화된 함수 호출로 응답하는 기능 — 을 OpenAI 형식으로 처리할 수 있습니다. 코딩 에이전트는 파일 편집·명령 실행을 전부 tool calling으로 수행하므로, 이게 꺼져 있으면(기본값 `0`) 채팅은 되지만 실제 작업은 하나도 못 합니다.
+
+**어디서 바꾸나:** 레포 루트의 `.env` 파일입니다 (`/home/kms/dev/vllm-setting/.env` — 최초 설정 때 `cp .env.example .env`로 만든 파일). Codex 쪽에서는 아무것도 바꾸지 않습니다.
 
 **어떻게:**
 
