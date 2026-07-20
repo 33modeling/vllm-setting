@@ -79,8 +79,25 @@ if (( gpu_count < ${#requested_gpus[@]} )) || (( gpu_count < TP_SIZE )); then
   echo "       This config targets 2x RTX 4090 — is this the right machine?" >&2
   exit 1
 fi
+for gpu_idx in "${requested_gpus[@]}"; do
+  if ! [[ "$gpu_idx" =~ ^[0-9]+$ ]] || (( gpu_idx >= gpu_count )); then
+    echo "ERROR: CUDA_VISIBLE_DEVICES contains '$gpu_idx' but this machine only has GPU indexes 0..$((gpu_count - 1))." >&2
+    echo "       Fix CUDA_VISIBLE_DEVICES in .env (list GPUs with: nvidia-smi -L)." >&2
+    exit 1
+  fi
+done
 
-# 3) MODEL: a local path must exist; a HuggingFace ID is downloaded on first run.
+# 3) VRAM: the default 27B-FP8 model needs a ~24 GB card per TP rank.
+if [[ "$MODEL" == "Qwen/Qwen3.6-27B-FP8" ]]; then
+  min_vram_mib="$(nvidia-smi -i "$CUDA_VISIBLE_DEVICES" --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | sort -n | head -1)"
+  if [[ "$min_vram_mib" =~ ^[0-9]+$ ]] && (( min_vram_mib < 20000 )); then
+    echo "ERROR: not enough VRAM for $MODEL: smallest selected GPU has ${min_vram_mib} MiB, need ~24576 MiB per GPU." >&2
+    echo "       This config targets 2x RTX 4090. Set a smaller MODEL in .env, or run on the GPU server." >&2
+    exit 1
+  fi
+fi
+
+# 4) MODEL: a local path must exist; a HuggingFace ID is downloaded on first run.
 if [[ "$MODEL" == /* || "$MODEL" == ./* ]]; then
   if [[ ! -e "$MODEL" ]]; then
     echo "ERROR: MODEL points to a local path that does not exist: $MODEL" >&2
@@ -89,11 +106,26 @@ if [[ "$MODEL" == /* || "$MODEL" == ./* ]]; then
   fi
 fi
 
-# 4) Port must be free.
+# 5) Port must be free.
 if ss -tln 2>/dev/null | awk '{print $4}' | grep -q ":$PORT\$"; then
   echo "ERROR: port $PORT is already in use — is another server running?" >&2
   echo "       Stop it with ./stop-vllm.sh or change PORT in .env." >&2
   exit 1
+fi
+
+# 6) Soft warnings: small /dev/shm breaks NCCL; low disk breaks the first download.
+shm_kib="$(df -k /dev/shm 2>/dev/null | awk 'NR==2 {print $2}')"
+if [[ "$shm_kib" =~ ^[0-9]+$ ]] && (( shm_kib < 1048576 )); then
+  echo "WARNING: /dev/shm is only $((shm_kib / 1024)) MiB; NCCL may fail with TP_SIZE=$TP_SIZE." >&2
+fi
+if [[ "$MODEL" != /* && "$MODEL" != ./* ]]; then
+  hf_hub_dir="${HF_HOME:-$HOME/.cache/huggingface}/hub/models--${MODEL//\//--}"
+  if [[ ! -d "$hf_hub_dir" ]]; then
+    avail_gib="$(df -BG --output=avail "$HOME" 2>/dev/null | awk 'NR==2 {gsub(/G/,""); print $1}')"
+    if [[ "$avail_gib" =~ ^[0-9]+$ ]] && (( avail_gib < 40 )); then
+      echo "WARNING: model not downloaded yet and only ${avail_gib} GiB free — the default model needs ~30 GiB." >&2
+    fi
+  fi
 fi
 
 # ----------------------------------------------------------------------------

@@ -78,7 +78,7 @@ flowchart TD
 - `.env`가 있으면 로드한 뒤 `vllm serve`를 exec으로 실행합니다. 기본값: 모델 `Qwen/Qwen3.6-27B-FP8`, 서빙 이름 `qwen3.6-27b`, `PORT=8000`, `TP_SIZE=2`, `MAX_MODEL_LEN=65536`, `MAX_NUM_SEQS=2`.
 - 1인 코딩용 플래그가 기본 적용됩니다: `--enable-prefix-caching`, `--enable-chunked-prefill`, `--disable-custom-all-reduce`, `--reasoning-parser qwen3`, `--language-model-only`(이미지 입력 미사용).
 - tool calling이 기본으로 켜져 있습니다(`ENABLE_TOOL_CALLS` 기본 `1`): `--enable-auto-tool-choice --tool-call-parser qwen3_coder`를 추가합니다. `.env`에 `ENABLE_TOOL_CALLS=0`을 넣으면 꺼집니다.
-- **실행 전 사전 점검(preflight)**: ① vllm 실행파일(`VLLM_BIN` 지정 → PATH → `./.venv/bin/vllm` 순으로 탐색) ② GPU 개수(`CUDA_VISIBLE_DEVICES`/`TP_SIZE` 충족 여부) ③ `MODEL`이 로컬 경로일 때 존재 여부 ④ 포트 사용 중 여부를 확인하고, 하나라도 안 맞으면 원인과 해결 방법을 에러로 출력한 뒤 중단합니다. 사양이 다른 머신에서 실행했을 때 바로 알 수 있습니다.
+- **실행 전 사전 점검(preflight)**: ① vllm 실행파일(`VLLM_BIN` 지정 → PATH → `./.venv/bin/vllm` 순으로 탐색) ② GPU — 드라이버 존재, 개수(`TP_SIZE` 충족), `CUDA_VISIBLE_DEVICES`의 번호가 실제 존재하는지 ③ VRAM — 기본 27B 모델 기준 GPU당 요구량 충족 여부 ④ `MODEL`이 로컬 경로일 때 존재 여부 ⑤ 포트 사용 중 여부를 확인하고, 하나라도 안 맞으면 원인과 해결 방법을 에러로 출력한 뒤 중단합니다. 추가로 `/dev/shm`이 작을 때(NCCL 실패 위험)와 모델 미다운로드 상태에서 디스크 여유가 부족할 때는 경고를 출력합니다. 사양이 다른 머신에서 실행하면 어느 항목이 문제인지 바로 알 수 있습니다.
 - 시작 시 자신의 PID를 `vllm.pid`에 기록합니다.
 
 ### `stop-vllm.sh` — 안전한 종료
@@ -399,6 +399,7 @@ claude
 - `run-llama-server.sh`: 기본 `http://127.0.0.1:8080/v1`, 컨텍스트 16K, KV cache `q8_0`, layer split으로 llama-server를 실행합니다.
 - `run-vllm-server.sh`: 4-bit AWQ 체크포인트(`cyankiwi/Qwen3-Coder-30B-A3B-Instruct-AWQ-4bit`), 8K 컨텍스트, TP=2 + expert parallel의 best-effort vLLM 대안 경로입니다.
 - `health-check.sh`(`BACKEND=llama|vllm` 선택), `stop-server.sh`(두 백엔드의 PID 파일 기반 종료)를 제공합니다.
+- 두 run 스크립트 모두 루트 스크립트와 같은 사전 점검을 수행합니다: 실행파일 경로(llama-server / vllm), 모델 파일 존재, GPU 드라이버·개수·번호, VRAM(vLLM 경로), 포트 사용 여부 — 안 맞으면 원인과 해결 방법을 에러로 출력하고 중단합니다.
 
 ### 권장 경로 (llama.cpp)
 
