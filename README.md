@@ -24,6 +24,7 @@ vllm-setting/
 ├── use-profile.sh             # profiles/*.env를 .env로 활성화(백업 포함)
 ├── install-systemd-user.sh    # systemd --user 서비스 설치
 ├── install-codex-config.sh    # Codex 프로필 파일(~/.codex/qwen-local.config.toml) 생성
+├── install-opencode-config.sh # OpenCode에 로컬 서버 프로바이더 등록
 ├── .env.example               # 루트 구성 설정 예시
 ├── profiles/
 │   ├── 64k.env                # 안정 기본 프로필 (MAX_MODEL_LEN=65536)
@@ -114,7 +115,12 @@ flowchart TD
 - `ENABLE_TOOL_CALLS=0`으로 꺼져 있으면 경고를 출력합니다(Codex는 tool calling이 필수).
 - `CODEX_MODEL`/`CODEX_BASE_URL`/`CODEX_PROFILE`/`CODEX_HOME`으로 대상을 바꿀 수 있습니다 — 방법은 "코딩 에이전트 연동 > Codex CLI > 환경 변수로 설정 바꾸기" 참고.
 
-## 실행 가이드
+### `install-opencode-config.sh` — OpenCode에 로컬 서버 등록
+
+- `.env`의 `SERVED_MODEL_NAME`/`PORT`를 읽어 OpenCode 전역 설정(`~/.config/opencode/opencode.json`)에 로컬 vLLM 서버를 프로바이더로 등록합니다. **OpenCode의 기본 모델은 건드리지 않습니다.**
+- 기존 설정을 보존합니다: JSON을 파싱해 `provider.vllm` 항목만 갱신하고 나머지 키(기본 모델, 테마, 다른 프로바이더)는 그대로 둡니다. 기존 JSON이 깨져 있으면 아무것도 바꾸지 않고 에러를 냅니다. 타임스탬프 백업도 남깁니다.
+- OpenCode는 OpenAI 호환(Chat Completions) 방식으로 붙으므로 Codex와 달리 vLLM의 `/v1/responses` 지원이 필요 없습니다.
+- `OPENCODE_MODEL`/`OPENCODE_BASE_URL`/`OPENCODE_PROVIDER`/`OPENCODE_CONFIG`로 대상을 바꿀 수 있습니다(JSON 병합에 python3 필요).
 
 ### 1. 설치 (vLLM이 없는 경우)
 
@@ -256,9 +262,18 @@ systemctl --user stop vllm-qwen36.service
 | `CODEX_PROFILE` | `qwen-local` | 로컬 모델을 등록할 프로필 이름이자 파일명(`<이름>.config.toml`). `codex --profile <이름>`으로 선택합니다. Codex 기본 모델은 바뀌지 않습니다. |
 | `CODEX_HOME` | `~/.codex` | 프로필 파일을 생성할 디렉터리. Codex 설정 위치를 옮겼을 때만 바꿉니다. |
 
+### OpenCode 연동용 (`install-opencode-config.sh`)
+
+| 변수 | 기본값 | 설명 |
+|---|---|---|
+| `OPENCODE_MODEL` | `SERVED_MODEL_NAME` 값 | opencode.json에 등록할 모델명. 서버의 서빙 이름과 일치해야 합니다. |
+| `OPENCODE_BASE_URL` | `http://127.0.0.1:$PORT/v1` | OpenCode가 접속할 서버 주소. 원격 서버를 쓸 때 바꿉니다. |
+| `OPENCODE_PROVIDER` | `vllm` | opencode.json 안의 프로바이더 키 이름. 기존에 직접 등록한 키가 있으면 그 이름으로 맞춰 갱신하세요. |
+| `OPENCODE_CONFIG` | `~/.config/opencode/opencode.json` | 설정 파일 경로. 프로젝트별 opencode.json을 쓸 때만 바꿉니다. |
+
 ## 코딩 에이전트 연동
 
-전제는 하나입니다: **서버가 떠 있어야 합니다.** 에이전트에 필요한 tool calling은 기본으로 켜져 있습니다(아래 참고).
+Codex·OpenCode·Claude Code 공통 전제는 하나입니다: **서버가 떠 있어야 합니다.** 에이전트에 필요한 tool calling은 기본으로 켜져 있습니다(아래 참고).
 
 ### 참고: tool calling은 기본으로 켜져 있음
 
@@ -348,6 +363,29 @@ wire_api = "responses"
 `config.toml`은 건드리지 않으므로 Codex의 기본 모델은 그대로입니다. 구버전 스크립트가 config.toml 안에 넣어둔 프로필 블록 때문에 Codex가 "config.toml 안의 프로필은 지원되지 않는다"는 에러를 낸다면, 이 스크립트를 다시 실행하세요 — 백업 후 해당 블록을 제거하고 별도 파일로 옮겨줍니다.
 
 > ⚠️ **`wire_api`는 `"responses"`여야 합니다.** Codex 0.132부터 `wire_api = "chat"`(Chat Completions 방식)이 제거돼 config에 남아 있으면 `wire_api = "chat" is no longer supported` 에러가 납니다. 예전 버전 스크립트로 등록했다면 `./install-codex-config.sh`를 다시 실행하면 갱신됩니다. 대신 서버 쪽 vLLM이 Responses API(`/v1/responses`)를 지원해야 하므로, 요청이 404로 실패하면 vLLM을 최신으로 업그레이드하세요(`uv pip install -U vllm`).
+
+### OpenCode
+
+OpenCode는 커스텀 프로바이더를 1급으로 지원해서 연동이 가장 단순합니다 — OpenAI 호환(Chat Completions)으로 바로 붙으므로 Codex처럼 vLLM의 Responses API 지원 여부를 신경 쓸 필요가 없습니다.
+
+```bash
+./install-opencode-config.sh              # 최초 1회 또는 서빙 이름·주소 변경 시: 프로바이더 등록
+opencode                                  # 기본 모델 그대로 실행 → /models로 로컬 모델 선택
+opencode -m vllm/qwen3.6-27b-fp8          # 로컬 모델로 바로 실행
+```
+
+- 등록은 전역 설정 `~/.config/opencode/opencode.json`의 `provider.vllm` 항목 하나만 갱신하며, 기본 모델·테마 등 나머지 설정은 보존됩니다.
+- **세션 중 모델 전환은 `/models`로 자유롭게 가능합니다** (Codex와 달리 재시작 불필요).
+- 이미 OpenCode에 직접 등록해뒀다면: 이 스크립트는 `provider.vllm` 키를 사용하므로, 직접 만든 항목이 다른 키 이름이면 중복 등록될 수 있습니다. `OPENCODE_PROVIDER=<기존 키>`로 맞춰 실행하면 기존 항목을 갱신합니다. **서빙 이름이 `qwen3.6-27b-fp8`로 바뀌었으므로, 옛 이름(`qwen3.6-27b`)으로 등록된 기존 설정은 이 스크립트를 한 번 실행해 갱신하세요.**
+
+환경 변수 (모두 실행 시점에 읽음 — 바꾼 뒤 재실행 필요):
+
+| 변수 | 기본값 | 의미 |
+|---|---|---|
+| `OPENCODE_MODEL` | `.env`의 `SERVED_MODEL_NAME` | 등록할 모델명 (서빙 이름과 일치해야 함) |
+| `OPENCODE_BASE_URL` | `http://127.0.0.1:$PORT/v1` | OpenCode가 접속할 서버 주소 |
+| `OPENCODE_PROVIDER` | `vllm` | opencode.json의 프로바이더 키 이름 |
+| `OPENCODE_CONFIG` | `~/.config/opencode/opencode.json` | 설정 파일 경로 |
 
 ### Claude Code
 
