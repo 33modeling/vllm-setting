@@ -22,9 +22,9 @@ CODEX_BASE_URL="${CODEX_BASE_URL:-http://127.0.0.1:$PORT/v1}"
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 CONFIG_PATH="$CODEX_HOME/config.toml"
 
-if [[ "${ENABLE_TOOL_CALLS:-0}" != "1" ]]; then
-  echo "WARNING: ENABLE_TOOL_CALLS is not 1 in .env." >&2
-  echo "         Codex requires tool calling; set ENABLE_TOOL_CALLS=1 and restart vLLM." >&2
+if [[ "${ENABLE_TOOL_CALLS:-1}" != "1" ]]; then
+  echo "WARNING: ENABLE_TOOL_CALLS is set to 0 in .env." >&2
+  echo "         Codex requires tool calling; remove that line (default is on) and restart vLLM." >&2
 fi
 
 mkdir -p "$CODEX_HOME"

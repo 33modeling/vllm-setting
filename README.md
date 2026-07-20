@@ -75,9 +75,9 @@ flowchart TD
 
 ### `run-qwen36-27b.sh` — vLLM 서버 실행
 
-- `.env`가 있으면 로드한 뒤 `vllm serve`를 exec으로 실행합니다. 기본값: 모델 `Qwen/Qwen3.6-27B-FP8`, 서빙 이름 `qwen3.6-27b`, `PORT=8000`, `TP_SIZE=2`, `MAX_MODEL_LEN=65536`, `MAX_NUM_SEQS=1`.
+- `.env`가 있으면 로드한 뒤 `vllm serve`를 exec으로 실행합니다. 기본값: 모델 `Qwen/Qwen3.6-27B-FP8`, 서빙 이름 `qwen3.6-27b`, `PORT=8000`, `TP_SIZE=2`, `MAX_MODEL_LEN=65536`, `MAX_NUM_SEQS=2`.
 - 1인 코딩용 플래그가 기본 적용됩니다: `--enable-prefix-caching`, `--enable-chunked-prefill`, `--disable-custom-all-reduce`, `--reasoning-parser qwen3`, `--language-model-only`(이미지 입력 미사용).
-- `ENABLE_TOOL_CALLS=1`이면 `--enable-auto-tool-choice --tool-call-parser qwen3_coder`를 추가합니다.
+- tool calling이 기본으로 켜져 있습니다(`ENABLE_TOOL_CALLS` 기본 `1`): `--enable-auto-tool-choice --tool-call-parser qwen3_coder`를 추가합니다. `.env`에 `ENABLE_TOOL_CALLS=0`을 넣으면 꺼집니다.
 - 시작 시 자신의 PID를 `vllm.pid`에 기록합니다.
 
 ### `stop-vllm.sh` — 안전한 종료
@@ -109,7 +109,7 @@ flowchart TD
 
 - `.env`의 `SERVED_MODEL_NAME`/`PORT`를 읽어 `~/.codex/config.toml`을 생성하고, Codex CLI가 로컬 vLLM 서버를 기본 모델로 쓰게 합니다.
 - 기존 config.toml은 타임스탬프 백업(`config.toml.backup.*`) 후 교체합니다.
-- `.env`에 `ENABLE_TOOL_CALLS=1`이 아니면 경고를 출력합니다(Codex는 tool calling이 필수).
+- `ENABLE_TOOL_CALLS=0`으로 꺼져 있으면 경고를 출력합니다(Codex는 tool calling이 필수).
 - `CODEX_MODEL`/`CODEX_BASE_URL`/`CODEX_HOME`으로 대상을 바꿀 수 있습니다 — 방법은 "코딩 에이전트 연동 > Codex CLI > 환경 변수로 설정 바꾸기" 참고.
 
 ## 실행 가이드
@@ -134,7 +134,7 @@ cp .env.example .env
 chmod +x *.sh
 ```
 
-필요하면 `.env`에서 GPU 번호(`CUDA_VISIBLE_DEVICES`), 포트(`PORT`), 컨텍스트 길이(`MAX_MODEL_LEN`)를 수정합니다. 프로필을 바로 쓰려면:
+필요하면 `.env`에서 GPU 번호(`CUDA_VISIBLE_DEVICES`), 포트(`PORT`), 컨텍스트 길이(`MAX_MODEL_LEN`)를 수정합니다. 설정 가능한 전체 항목과 각 항목의 의미는 아래 "`.env` 설정 레퍼런스" 참고. 프로필을 바로 쓰려면:
 
 ```bash
 ./use-profile.sh 64k    # 안정 기본값 (65536)
@@ -185,45 +185,72 @@ systemctl --user stop vllm-qwen36.service
 
 부팅 후 자동 시작에는 환경에 따라 linger가 필요할 수 있습니다: `loginctl enable-linger "$USER"`.
 
+## `.env` 설정 레퍼런스
+
+`.env`는 레포 루트에 두는 **로컬 전용** 설정 파일입니다. `cp .env.example .env`로 만들며, 컴퓨터마다 값이 다르므로 `.gitignore`에 등록돼 Git에는 올라가지 않습니다. 모든 스크립트는 시작할 때 이 파일을 읽고, 파일이나 항목이 없으면 아래 기본값으로 동작합니다. **값을 바꾸면 서버를 재시작해야 반영됩니다**: `./stop-vllm.sh && ./run-qwen36-27b.sh`.
+
+### 모델·서버 기본
+
+| 변수 | 기본값 | 설명 |
+|---|---|---|
+| `MODEL` | `Qwen/Qwen3.6-27B-FP8` | 서빙할 모델의 HuggingFace ID. 처음 실행 시 자동 다운로드됩니다. 다른 모델로 바꾸면 `--reasoning-parser`, `--tool-call-parser`가 그 모델과 호환되는지 확인이 필요합니다. |
+| `SERVED_MODEL_NAME` | `qwen3.6-27b` | API에서 노출되는 모델명. 클라이언트(Codex, OpenAI SDK 등)가 요청에 적는 이름이 이것과 일치해야 합니다. HuggingFace ID를 그대로 쓰기 길어서 짧은 별칭을 붙이는 용도입니다. |
+| `HOST` | `0.0.0.0` | 서버가 바인딩할 주소. `0.0.0.0`은 모든 인터페이스에서 접속 허용(같은 네트워크의 다른 기기 포함), `127.0.0.1`은 이 컴퓨터에서만 접속 가능. 외부 공개 시에는 방화벽/인증을 함께 구성하세요. |
+| `PORT` | `8000` | API 포트. 클라이언트는 `http://localhost:8000/v1`로 접속합니다. 다른 프로그램과 충돌하면 변경하세요. |
+| `CUDA_VISIBLE_DEVICES` | `0,1` | 사용할 GPU 번호(nvidia-smi 기준). 예: GPU 1개만 쓰려면 `0`, 2·3번을 쓰려면 `2,3`. |
+| `TP_SIZE` | `2` | 텐서 병렬 크기 — 모델을 몇 장의 GPU에 나눠 올릴지. `CUDA_VISIBLE_DEVICES`의 GPU 개수와 일치해야 합니다. |
+| `DTYPE` | `auto` | 모델 가중치 연산 자료형. `auto`면 모델 설정을 따릅니다(FP8 모델은 FP8). 보통 바꿀 일 없습니다. |
+| `PID_FILE` | `레포/vllm.pid` | 서버 프로세스 ID를 기록할 파일 경로. `stop-vllm.sh`가 종료 대상을 찾을 때 씁니다. 바꿀 일 거의 없습니다. |
+
+### 메모리·컨텍스트
+
+| 변수 | 기본값 | 설명 |
+|---|---|---|
+| `MAX_MODEL_LEN` | `65536` | 최대 컨텍스트 길이(토큰). 프롬프트+응답 합계의 상한입니다. 크게 잡을수록 KV cache 메모리를 더 예약합니다. 128K가 필요하면 `./use-profile.sh 128k`. OOM이 나면 이 값을 낮추는 게 가장 효과적입니다(`98304` → `65536` 순). |
+| `GPU_MEMORY_UTILIZATION` | `0.90` | vLLM이 GPU 메모리의 몇 %까지 쓸지. 모니터가 연결된 GPU라면 화면 출력용 여유가 필요해 `0.85` 정도로 낮추는 게 안전합니다. |
+| `MAX_NUM_SEQS` | `2` | 동시에 처리할 요청(시퀀스) 수. Codex/Claude Code 같은 에이전트는 본 요청 외에 서브에이전트·백그라운드 요청을 병렬로 보내므로 기본값을 `2`로 잡았습니다(병렬이 많으면 `3`~`4`로). 에이전트 없이 단일 채팅만 쓴다면 `1`로 낮춰 KV cache를 한 요청에 몰아줄 수 있습니다. |
+| `MAX_NUM_BATCHED_TOKENS` | `8192` | 한 스텝에 prefill(프롬프트 처리)할 최대 토큰 수. 키우면 긴 프롬프트 처리 속도가 빨라지지만 활성화 메모리를 더 씁니다. |
+| `KV_CACHE_DTYPE` | `auto` | KV cache 자료형. `auto`는 bf16. Qwen3.6-27B는 하이브리드 어텐션이라 KV가 작아 128K도 bf16으로 충분합니다 — `fp8`은 이 모델에선 불필요하고 품질을 약간 깎을 수 있습니다. |
+
+### 기능 스위치 (1=켜짐, 0=꺼짐)
+
+| 변수 | 기본값 | 설명 |
+|---|---|---|
+| `ENABLE_TOOL_CALLS` | `1` | vLLM이 tool calling(모델이 파일 편집·명령 실행 지시를 구조화된 함수 호출로 응답)을 OpenAI 형식으로 파싱하게 합니다. **Codex/Claude Code 연동에 필수**라 기본으로 켜져 있습니다. tool을 안 쓰는 일반 채팅에는 영향이 없습니다. |
+| `ENABLE_PREFIX_CACHING` | `1` | 같은 프롬프트 앞부분(시스템 프롬프트, repo 컨텍스트)을 반복 투입할 때 재계산을 생략합니다. 코딩 에이전트 워크로드에 특히 유리합니다. |
+| `ENABLE_CHUNKED_PREFILL` | `1` | 긴 프롬프트 처리를 잘게 쪼개 생성 요청과 섞어 처리합니다. 긴 컨텍스트에서 응답 지연을 줄여줍니다. |
+| `DISABLE_CUSTOM_ALL_REDUCE` | `1` | GPU 간 통신에 vLLM 커스텀 구현 대신 NCCL 표준을 씁니다. NVLink 없는 4090 2장 환경에서 안정성이 우선이라 켜져 있습니다. |
+| `TRUST_REMOTE_CODE` | `0` | HuggingFace 모델 저장소의 커스텀 파이썬 코드 실행을 허용할지. 보안상 기본 꺼짐. Qwen 계열은 필요 없습니다. |
+
+### 보조 스크립트용
+
+| 변수 | 기본값 | 설명 |
+|---|---|---|
+| `TIMEOUT_SECONDS` | `30` | `stop-vllm.sh`가 SIGTERM(정상 종료 요청) 후 이 시간만큼 기다렸다가, 안 죽으면 SIGKILL(강제 종료)합니다. |
+| `WAIT_READY_SECONDS` | `300` | `health-check.sh`가 서버 준비(`/v1/models` 응답)를 기다리는 최대 시간. 모델 로딩이 느린 환경이면 늘리세요. |
+| `REQUEST_TIMEOUT` | `120`(헬스 체크) / `180`(벤치마크) | 개별 요청의 응답 대기 시간. |
+| `CHAT_CHECK` | `1` | `health-check.sh`가 models 확인 후 실제 chat completion 요청까지 보낼지. `0`이면 models 확인만 합니다. |
+| `BENCH_MAX_TOKENS` | `512` | `benchmark-smoke.sh`가 프롬프트당 생성할 토큰 수. 키울수록 벤치마크가 오래 걸리는 대신 tok/s 측정이 안정적입니다. |
+| `BASE_URL` | `http://127.0.0.1:$PORT/v1` | 헬스 체크/벤치마크가 접속할 주소. 원격 서버를 점검할 때만 바꿉니다. |
+
+### Codex 연동용 (`install-codex-config.sh`)
+
+| 변수 | 기본값 | 설명 |
+|---|---|---|
+| `CODEX_MODEL` | `SERVED_MODEL_NAME` 값 | Codex config에 기록할 모델명. 서버의 서빙 이름과 일치해야 Codex 요청이 통합니다. |
+| `CODEX_BASE_URL` | `http://127.0.0.1:$PORT/v1` | Codex가 접속할 서버 주소. 2080 Ti 구성의 llama.cpp(포트 8080)로 보낼 때 바꿉니다. |
+| `CODEX_HOME` | `~/.codex` | `config.toml`을 생성할 디렉터리. Codex 설정 위치를 옮겼을 때만 바꿉니다. |
+
 ## 코딩 에이전트 연동
 
-Codex CLI와 Claude Code 모두 공통 전제는 두 가지입니다: **서버가 떠 있어야 하고**, **`ENABLE_TOOL_CALLS=1`**이 켜져 있어야 합니다. 후자는 바로 아래 "사전 준비"대로 설정합니다.
+전제는 하나입니다: **서버가 떠 있어야 합니다.** 에이전트에 필요한 tool calling은 기본으로 켜져 있습니다(아래 참고).
 
-### 사전 준비: `ENABLE_TOOL_CALLS=1` 켜기
+### 참고: tool calling은 기본으로 켜져 있음
 
-**이게 뭔가:** `ENABLE_TOOL_CALLS`는 Codex나 Claude Code의 설정이 **아니라**, 이 레포가 정의한 **vLLM 서버 쪽 스위치**입니다. 클라이언트/서버 설정은 완전히 분리돼 있습니다:
+코딩 에이전트는 파일 편집·명령 실행을 전부 **tool calling**(모델이 작업 지시를 일반 텍스트가 아닌 구조화된 함수 호출로 응답하는 기능)으로 수행합니다. 이 레포는 기본값으로 이 기능이 켜져 있어서 — `run-qwen36-27b.sh`가 `vllm serve`에 `--enable-auto-tool-choice --tool-call-parser qwen3_coder` 옵션을 자동으로 붙입니다 — 별도 설정 없이 서버만 띄우면 됩니다.
 
-| 쪽 | 설정 파일 | 무엇을 정하나 |
-|---|---|---|
-| Codex (클라이언트) | `~/.codex/config.toml` | 어느 서버에 접속할지, 어떤 모델명을 쓸지 |
-| vLLM 서버 (이 레포) | 레포 루트 `.env` | 서버를 어떤 옵션으로 띄울지 — `ENABLE_TOOL_CALLS`는 여기 |
-
-**왜 필요한가:** `run-qwen36-27b.sh`가 서버를 시작할 때 `.env`를 읽고, `ENABLE_TOOL_CALLS=1`이면 `vllm serve`에 `--enable-auto-tool-choice --tool-call-parser qwen3_coder` 옵션을 붙입니다. 이 옵션이 있어야 vLLM이 tool calling — 모델이 "파일을 읽어라, 명령을 실행해라"를 일반 텍스트가 아닌 구조화된 함수 호출로 응답하는 기능 — 을 OpenAI 형식으로 처리할 수 있습니다. 코딩 에이전트는 파일 편집·명령 실행을 전부 tool calling으로 수행하므로, 이게 꺼져 있으면(기본값 `0`) 채팅은 되지만 실제 작업은 하나도 못 합니다.
-
-**어디서 바꾸나:** 레포 루트의 `.env` 파일입니다 (`/home/kms/dev/vllm-setting/.env` — 최초 설정 때 `cp .env.example .env`로 만든 파일). Codex 쪽에서는 아무것도 바꾸지 않습니다.
-
-**어떻게:**
-
-```bash
-cd /home/kms/dev/vllm-setting
-
-# 1) .env 열어서 ENABLE_TOOL_CALLS=0 줄을 1로 수정 (에디터 사용 시)
-nano .env
-
-#    또는 한 줄로 바로 수정:
-sed -i 's/^ENABLE_TOOL_CALLS=0/ENABLE_TOOL_CALLS=1/' .env
-
-# 2) 반영됐는지 확인 (ENABLE_TOOL_CALLS=1 이 출력돼야 함)
-grep ENABLE_TOOL_CALLS .env
-
-# 3) 서버 재시작 — .env는 서버 시작 시점에만 읽히므로 재시작 필수
-./stop-vllm.sh && ./run-qwen36-27b.sh
-#    systemd 사용 시: systemctl --user restart vllm-qwen36.service
-```
-
-> ⚠️ **프로필 전환 시 리셋됩니다.** `./use-profile.sh 64k`/`128k`는 `.env`를 프로필 파일로 통째로 교체하는데, `profiles/64k.env`와 `profiles/128k.env` 모두 `ENABLE_TOOL_CALLS=0`입니다. 프로필을 바꾼 뒤에는 위 1~3단계를 다시 실행하세요. (에이전트를 계속 쓸 거라면 `profiles/*.env` 안의 값을 아예 `1`로 바꿔두는 것도 방법입니다.)
-
-이 값이 켜지면 `run-qwen36-27b.sh`가 vLLM에 `--enable-auto-tool-choice --tool-call-parser qwen3_coder` 플래그를 추가해 OpenAI 형식의 tool calling을 처리합니다.
+- 이 스위치(`ENABLE_TOOL_CALLS`)는 vLLM **서버** 쪽 설정입니다. Codex/Claude Code 클라이언트 설정(`~/.codex/config.toml` 등)과는 무관합니다.
+- tool을 쓰지 않는 일반 채팅 요청에는 영향이 없으므로 켜둬도 무방합니다. 끄고 싶을 때만 `.env`에 `ENABLE_TOOL_CALLS=0`을 넣고 서버를 재시작합니다.
 
 ### Codex CLI
 
@@ -332,8 +359,8 @@ claude
 
 ### 공통 주의사항
 
-- **`ENABLE_TOOL_CALLS=1` 필수.** 설정 위치와 절차는 위 "사전 준비" 참고. 프로필 전환 후 리셋되는 점에 특히 주의.
-- **`MAX_NUM_SEQS=2~4` 권장.** Claude Code는 본 요청 외에 백그라운드 요청(세션 제목 생성, 서브에이전트 등)을 병렬로 보냅니다. 기본값 `1`이면 이 요청들이 직렬 대기하므로 에이전트 용도에서는 2~4가 낫습니다. prefix caching이 켜져 있어 KV cache 부담은 크지 않습니다.
+- **tool calling이 꺼져 있으면 동작 불가.** 기본은 켜져 있으므로 보통 신경 쓸 일이 없지만, `.env`에 `ENABLE_TOOL_CALLS=0`을 넣었다면 에이전트가 파일 수정·명령 실행을 전혀 못 합니다.
+- **병렬 요청은 `MAX_NUM_SEQS`가 처리.** Claude Code는 본 요청 외에 백그라운드 요청(세션 제목 생성, 서브에이전트 등)을 병렬로 보내는데, 기본값이 `2`라 별도 설정 없이 대응됩니다. 서브에이전트를 많이 쓴다면 `3`~`4`로 올리세요. prefix caching이 켜져 있어 KV cache 부담은 크지 않습니다.
 - **컨텍스트는 넉넉하게.** 에이전트의 시스템 프롬프트 + 도구 정의만으로 수만 토큰을 차지하므로 64K 이상(가능하면 `./use-profile.sh 128k`)을 권장합니다.
 - 웹 검색 같은 Anthropic 서버사이드 기능은 커스텀 백엔드에서 동작하지 않습니다.
 
@@ -390,10 +417,10 @@ BACKEND=vllm ./health-check.sh
 
 ## 컨텍스트 튜닝 노트
 
-- 기본 `MAX_MODEL_LEN=65536`은 2x24GB에서 안정성을 우선한 값입니다. 1인 사용이므로 `MAX_NUM_SEQS=1`로 KV cache를 한 세션에 몰아줍니다. 단, Claude Code처럼 백그라운드 요청을 병렬로 보내는 에이전트를 붙일 때는 `MAX_NUM_SEQS=2~4`가 낫습니다("코딩 에이전트 연동 > 공통 주의사항" 참고).
+- 기본 `MAX_MODEL_LEN=65536`은 2x24GB에서 안정성을 우선한 값입니다. `MAX_NUM_SEQS`는 코딩 에이전트의 서브에이전트·백그라운드 병렬 요청을 고려해 기본 `2`입니다 — 에이전트 없이 단일 채팅만 한다면 `1`로 낮춰 KV cache를 한 세션에 몰아줄 수 있고, 병렬이 많으면 `3`~`4`로 올립니다.
 - Qwen3.6-27B는 하이브리드 어텐션(레이어 4개 중 1개만 full attention)이라 KV cache가 토큰당 약 64KB로 작아, 128K도 bf16 KV(`KV_CACHE_DTYPE=auto`) 그대로 여유 있게 들어갑니다. `fp8` KV는 이 모델에서는 메모리상 불필요하고 품질을 약간 깎을 수 있어 쓰지 않습니다.
 - OOM이 나면 `MAX_MODEL_LEN`을 `98304` 또는 `65536`으로 낮추는 쪽이 가장 효과적입니다.
 - `--enable-prefix-caching`: 같은 repo/context를 반복 투입하는 코딩 에이전트 워크로드에 유리합니다.
 - `--disable-custom-all-reduce`: NVLink 없는 4090 2장 환경에서 안정성을 우선합니다.
-- `ENABLE_TOOL_CALLS=1`: OpenAI tool calling을 vLLM parser(`qwen3_coder`)로 처리하고 싶을 때만 켭니다. 코딩 에이전트(Codex/Claude Code)를 붙일 때는 필수입니다.
+- `ENABLE_TOOL_CALLS`: 기본 `1` — OpenAI tool calling을 vLLM parser(`qwen3_coder`)로 처리합니다. 코딩 에이전트(Codex/Claude Code)에 필수이며, tool을 쓰지 않는 순수 채팅 서빙만 한다면 `0`으로 꺼도 됩니다.
 - 2080 Ti는 Turing(SM 7.5)이므로 FP8 모델을 사용하지 않습니다. 외부 접근이 필요할 때만 `HOST=0.0.0.0`으로 바꾸고 방화벽/리버스 프록시 인증을 함께 설정합니다.
