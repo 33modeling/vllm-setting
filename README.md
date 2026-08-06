@@ -507,3 +507,64 @@ BACKEND=vllm ./health-check.sh
 - `--disable-custom-all-reduce`: NVLink 없는 4090 2장 환경에서 안정성을 우선합니다.
 - `ENABLE_TOOL_CALLS`: 기본 `1` — OpenAI tool calling을 vLLM parser(`qwen3_coder`)로 처리합니다. 코딩 에이전트(Codex/Claude Code)에 필수이며, tool을 쓰지 않는 순수 채팅 서빙만 한다면 `0`으로 꺼도 됩니다.
 - 2080 Ti는 Turing(SM 7.5)이므로 FP8 모델을 사용하지 않습니다. 외부 접근이 필요할 때만 `HOST=0.0.0.0`으로 바꾸고 방화벽/리버스 프록시 인증을 함께 설정합니다.
+
+<!-- repo-design:start -->
+## 설계 구조
+
+이 저장소는 **ML 실험 저장소** 형태로 구성한다.
+
+### 설계 원칙
+
+- 데이터 준비, 학습·실험, 평가, 결과 집계를 단계별로 분리해 재현성과 비교 가능성을 확보한다.
+- 설정과 산출물을 코드에서 분리하고 같은 입력·시드가 같은 실험을 만들도록 유지한다.
+
+### 실행·데이터 흐름
+
+1. 환경 명세와 설정 파일에서 모델·데이터·하이퍼파라미터 계약을 고정한다.
+2. 데이터 준비 단계에서 원천 입력을 재현 가능한 실험 입력으로 변환한다.
+3. 학습·실험 진입점에서 설정을 읽어 모델 또는 실험 팔을 실행한다.
+4. `qwen36-35b-a3b-h100/bfcl_api_eval.py`에서 공통 지표로 결과를 집계하고 표·JSON·문서를 생성한다.
+
+### 모듈 책임
+
+| 경로 | 책임 |
+|---|---|
+| `profiles/` | profiles 기능과 관련 구현·자산의 모듈 경계 |
+| `qwen3-coder-2080ti/` | qwen3-coder-2080ti 기능과 관련 구현·자산의 모듈 경계 |
+| `qwen36-35b-a3b-h100/` | qwen36-35b-a3b-h100 기능과 관련 구현·자산의 모듈 경계 |
+| `systemd/` | systemd 기능과 관련 구현·자산의 모듈 경계 |
+
+### 파일 구조
+
+```text
+vllm-setting/
+├── profiles/
+│   ├── 128k.env
+│   └── 64k.env
+├── qwen3-coder-2080ti/
+│   ├── .env.example
+│   ├── download-gguf.sh
+│   ├── health-check.sh
+│   ├── install-llama-cpp.sh
+│   └── ... (4개 항목 더 있음)
+├── qwen36-35b-a3b-h100/
+│   ├── .gitignore
+│   ├── bfcl_api_eval.py
+│   ├── README.md
+│   ├── run.sh
+│   └── ... (2개 항목 더 있음)
+├── systemd/
+│   └── vllm-qwen36.service.in
+├── .env.example
+├── .gitignore
+├── benchmark-smoke.sh
+├── health-check.sh
+├── install-codex-config.sh
+├── install-opencode-config.sh
+├── install-systemd-user.sh
+├── README.md
+├── run-qwen36-27b-fp8.sh
+├── stop-vllm.sh
+└── use-profile.sh
+```
+<!-- repo-design:end -->
