@@ -9,3 +9,6 @@ qwen3-coder-2080ti/llama.cpp/
 qwen3-coder-2080ti/models/
 qwen3-coder-2080ti/.venv-vllm/
 qwen3-coder-2080ti/*.pid
+qwen38-27b-h100x2.env
+qwen38-27b-4090x2.env
+vllm-qwen38-*.pid

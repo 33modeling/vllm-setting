@@ -4,20 +4,26 @@
 
 ## 개요
 
-이 레포는 개인용(1인 코딩 에이전트/IDE/CLI) 로컬 LLM 서버를 재현 가능하게 띄우기 위해 존재합니다. 두 가지 하드웨어 타깃을 다룹니다.
+이 레포는 개인용(1인 코딩 에이전트/IDE/CLI) 로컬 LLM 서버를 재현 가능하게 띄우기 위해 존재합니다. 네 가지 하드웨어 타깃을 다룹니다.
 
 | 구성 | 하드웨어 | 모델 | 백엔드 | API |
 |---|---|---|---|---|
 | 루트 디렉터리 (기본) | 2x RTX 4090 | `Qwen/Qwen3.6-27B-FP8` | vLLM | `http://localhost:8000/v1`, 모델명 `qwen3.6-27b-fp8` |
+| `run-qwen38-27b-h100x2.sh` | 2x H100 80GB | `Qwen/Qwen3.8-27B` (BF16) | vLLM | `http://localhost:8000/v1`, 모델명 `qwen3.8-27b` |
+| `run-qwen38-27b-4090x2.sh` | 2x RTX 4090 | `Qwen/Qwen3.8-27B-FP8` | vLLM | `http://localhost:8000/v1`, 모델명 `qwen3.8-27b-fp8` |
 | `qwen3-coder-2080ti/` | 2x RTX 2080 Ti (11 GB x 2) | `Qwen3-Coder-30B-A3B-Instruct` | llama.cpp(권장) / vLLM(best-effort) | `http://127.0.0.1:8080/v1`(llama.cpp), 모델명 `qwen3-coder-30b-a3b` |
 
-모든 튜닝 값은 `.env` 파일로 오버라이드할 수 있고, 스크립트 자체를 수정할 필요가 없도록 설계되어 있습니다.
+모든 튜닝 값은 `.env` 파일로 오버라이드할 수 있고, 스크립트 자체를 수정할 필요가 없도록 설계되어 있습니다. 단, Qwen3.8 스크립트 두 개는 **공유 `.env`가 아니라 각자의 `qwen38-27b-*.env`를 읽습니다** — 공유 `.env`의 `MODEL`이 Qwen3.6을 가리키고 있어서 그대로 두면 조용히 덮어쓰기 때문입니다.
 
 ## 코드 구성
 
 ```text
 vllm-setting/
 ├── run-qwen36-27b-fp8.sh          # vLLM 실행 (2x 4090, Qwen3.6-27B-FP8)
+├── run-qwen38-27b-h100x2.sh       # vLLM 실행 (2x H100 80GB, Qwen3.8-27B BF16)
+├── run-qwen38-27b-4090x2.sh       # vLLM 실행 (2x 4090, Qwen3.8-27B-FP8)
+├── qwen38-27b-h100x2.env.example  # H100 구성 설정 예시
+├── qwen38-27b-4090x2.env.example  # 4090 Qwen3.8 구성 설정 예시
 ├── stop-vllm.sh               # vLLM 프로세스 트리 종료 및 GPU 반환
 ├── health-check.sh            # /v1/models + chat completion 확인
 ├── benchmark-smoke.sh         # 코딩 프롬프트 3종 성능 스모크 테스트
@@ -81,6 +87,13 @@ flowchart TD
 - tool calling이 기본으로 켜져 있습니다(`ENABLE_TOOL_CALLS` 기본 `1`): `--enable-auto-tool-choice --tool-call-parser qwen3_coder`를 추가합니다. `.env`에 `ENABLE_TOOL_CALLS=0`을 넣으면 꺼집니다.
 - **실행 전 사전 점검(preflight)**: ① vllm 실행파일(`VLLM_BIN` 지정 → PATH → `./.venv/bin/vllm` 순으로 탐색) ② GPU — 드라이버 존재, 개수(`TP_SIZE` 충족), `CUDA_VISIBLE_DEVICES`의 번호가 실제 존재하는지 ③ VRAM — 기본 27B 모델 기준 GPU당 요구량 충족 여부 ④ `MODEL`이 로컬 경로일 때 존재 여부 ⑤ 포트 사용 중 여부를 확인하고, 하나라도 안 맞으면 원인과 해결 방법을 에러로 출력한 뒤 중단합니다. 추가로 `/dev/shm`이 작을 때(NCCL 실패 위험)와 모델 미다운로드 상태에서 디스크 여유가 부족할 때는 경고를 출력합니다. 사양이 다른 머신에서 실행하면 어느 항목이 문제인지 바로 알 수 있습니다.
 - 시작 시 자신의 PID를 `vllm.pid`에 기록합니다.
+
+### `run-qwen38-27b-h100x2.sh` / `run-qwen38-27b-4090x2.sh` — Qwen3.8-27B 서버 실행
+
+- 구조는 `run-qwen36-27b-fp8.sh`와 동일합니다(사전 점검 → 인자 조립 → `exec vllm serve`). 차이는 읽는 설정 파일과 하드웨어 기본값뿐입니다. 자세한 값은 "Qwen3.8-27B 구성" 절 참고.
+- **공유 `.env`를 읽지 않습니다.** 각각 `qwen38-27b-h100x2.env` / `qwen38-27b-4090x2.env`를 읽고, 없으면 스크립트 내장 기본값으로 동작합니다. `ENV_FILE=...`로 경로를 바꿀 수 있습니다.
+- 사전 점검이 두 가지 늘었습니다: **vLLM 버전**(Qwen3.8은 하이브리드 어텐션이라 `0.17.0+` 필요 — 낮으면 경고), **compute capability**(FP8은 `8.9+` 필요 — 4090 스크립트에서 Ampere 이하면 중단하고 llama.cpp 경로를 안내).
+- PID 파일이 `vllm.pid`가 아니라 `vllm-qwen38-h100x2.pid` / `vllm-qwen38-4090x2.pid`입니다. `stop-vllm.sh`는 공유 `.env`를 읽으므로 종료할 때 PID 파일을 넘겨야 하고, 실행 배너에 정확한 명령이 출력됩니다.
 
 ### `stop-vllm.sh` — 안전한 종료
 
@@ -445,6 +458,70 @@ claude
 - **병렬 요청은 `MAX_NUM_SEQS`가 처리.** Claude Code는 본 요청 외에 백그라운드 요청(세션 제목 생성, 서브에이전트 등)을 병렬로 보내는데, 기본값이 `2`라 별도 설정 없이 대응됩니다. 서브에이전트를 많이 쓴다면 `3`~`4`로 올리세요. prefix caching이 켜져 있어 KV cache 부담은 크지 않습니다.
 - **컨텍스트는 넉넉하게.** 에이전트의 시스템 프롬프트 + 도구 정의만으로 수만 토큰을 차지하므로 64K 이상(가능하면 `./use-profile.sh 128k`)을 권장합니다.
 - 웹 검색 같은 Anthropic 서버사이드 기능은 커스텀 백엔드에서 동작하지 않습니다.
+
+## Qwen3.8-27B 구성
+
+Qwen3.8-27B를 두 하드웨어에 올리는 구성입니다. 루트의 Qwen3.6 구성과 병존하며 서로 건드리지 않습니다.
+
+### 모델 특성 (설정에 영향을 주는 것만)
+
+- **하이브리드 어텐션** — 64개 층 중 48개가 linear attention. 이 아키텍처 지원 때문에 **vLLM `0.17.0` 이상**이 필요합니다. 낮은 버전에서는 unsupported architecture로 뜹니다.
+- KV cache가 자라는 층은 **4개 중 1개뿐**이라 Qwen3.6과 마찬가지로 토큰당 KV가 작습니다 — 컨텍스트를 크게 잡아도 KV가 먼저 터지지 않습니다.
+- 네이티브 컨텍스트 **262,144**. 그 이상은 `VLLM_ALLOW_LONG_MAX_MODEL_LEN=1` + YaRN으로 1M까지 확장 가능합니다.
+- **네이티브 VLM**(이미지·비디오)입니다. 텍스트만 쓸 거면 `LANGUAGE_MODEL_ONLY=1`로 vision tower를 떼서 VRAM을 아낍니다.
+- thinking이 기본 ON이고 `reasoning_effort`(low/medium/xhigh)로 조절합니다. 파서는 Qwen3.6과 동일하게 `--reasoning-parser qwen3` + `--tool-call-parser qwen3_coder`.
+
+### 2x H100 80GB — BF16 (`run-qwen38-27b-h100x2.sh`)
+
+160 GB면 BF16 원본(~54 GB)이 그대로 들어가므로 **양자화하지 않습니다**. 다중 사용자 기본값입니다.
+
+| 항목 | 값 | 이유 |
+|---|---|---|
+| `MODEL` | `Qwen/Qwen3.8-27B` | 무양자화 원본 |
+| `MAX_MODEL_LEN` | `262144` | 네이티브 전체 컨텍스트 |
+| `KV_CACHE_DTYPE` | `fp8` | 262K x 동시 16 세션을 감당하려면 필요 |
+| `MAX_NUM_SEQS` | `16` | 다중 사용자 |
+| `DISABLE_CUSTOM_ALL_REDUCE` | `0` | NVLink가 있으므로 custom all-reduce가 빠른 경로 |
+| `LANGUAGE_MODEL_ONLY` | `0` | VRAM 여유가 있어 이미지 입력 유지 |
+
+```bash
+cp qwen38-27b-h100x2.env.example qwen38-27b-h100x2.env   # 선택 (없어도 동작)
+./run-qwen38-27b-h100x2.sh
+PORT=8000 SERVED_MODEL_NAME=qwen3.8-27b ./health-check.sh   # 다른 터미널
+PID_FILE=./vllm-qwen38-h100x2.pid PORT=8000 ./stop-vllm.sh
+```
+
+`ENABLE_MTP=1`로 MTP draft head 투기적 디코딩을 켤 수 있습니다. 저동시성 지연에만 도움이 되고 체크포인트에 speculative 모듈이 있어야 하므로 **기본은 off**입니다 — 켠 뒤 `./benchmark-smoke.sh`로 실제 이득을 확인하세요.
+
+### 2x RTX 4090 — FP8 (`run-qwen38-27b-4090x2.sh`)
+
+48 GB에는 BF16(~54 GB)이 안 들어가므로 공식 block-wise FP8 체크포인트를 씁니다. 가중치 ~28 GB → TP=2로 14 GB/GPU, 나머지 약 15 GB가 KV 몫입니다.
+
+| 항목 | 값 | 이유 |
+|---|---|---|
+| `MODEL` | `Qwen/Qwen3.8-27B-FP8` | 4090에서 쓸 수 있는 유일한 실용 양자화 (아래 참고) |
+| `MAX_MODEL_LEN` | `65536` | 안정 기본값. 131072도 대체로 들어감 |
+| `KV_CACHE_DTYPE` | `auto` | Qwen3.6 구성과 같은 판단 — 65536에서는 bf16 KV가 들어가고 fp8의 품질 손해를 피함 |
+| `MAX_NUM_SEQS` | `2` | 1인 코딩 + 백그라운드 요청 |
+| `DISABLE_CUSTOM_ALL_REDUCE` | `1` | NVLink 없음 |
+| `LANGUAGE_MODEL_ONLY` | `1` | vision tower를 떼서 VRAM 확보 |
+
+```bash
+cp qwen38-27b-4090x2.env.example qwen38-27b-4090x2.env   # 선택 (없어도 동작)
+./run-qwen38-27b-4090x2.sh
+PORT=8000 SERVED_MODEL_NAME=qwen3.8-27b-fp8 ./health-check.sh
+PID_FILE=./vllm-qwen38-4090x2.pid PORT=8000 ./stop-vllm.sh
+```
+
+**왜 FP8뿐인가** — 2026-08 기준 Qwen3.8-27B의 vLLM용 양자화는 공식 FP8이 사실상 유일합니다.
+
+- FP8 block-wise는 compute capability `8.9+`를 요구하고 Ada(4090)가 정확히 `8.9`라 네이티브로 돕니다. Ampere 이하는 불가 — 스크립트가 사전 점검에서 막습니다.
+- NVFP4 / NVFP4A16은 대안이 못 됩니다. MLP만 4bit이라 디스크가 28.8 GiB로 FP8과 거의 같고, 네이티브 FP4 GEMM은 Blackwell(SM100+) 전용이라 4090에서는 런타임 역양자화로 더 느립니다.
+- AWQ / GPTQ 4-bit 커뮤니티 양자화는 Qwen3.6-27B에만 있고 3.8용은 아직 없습니다. 더 가볍게 가야 한다면 Qwen3.6-27B 4bit으로 내려가는 선택지가 됩니다.
+
+### OOM 대처
+
+`MAX_MODEL_LEN`을 `32768`로 낮추는 것이 가장 효과적입니다. 그 다음이 `KV_CACHE_DTYPE=fp8`, 그 다음이 `GPU_MEMORY_UTILIZATION`을 `0.85`로 낮추는 순서입니다. 반대로 131072로 올릴 때는 `KV_CACHE_DTYPE=fp8`을 함께 켜세요.
 
 ## 2080 Ti 구성 (`qwen3-coder-2080ti/`)
 
