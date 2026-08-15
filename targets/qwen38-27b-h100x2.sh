@@ -13,6 +13,7 @@ set -euo pipefail
 # silently override MODEL here.
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/qwen38-27b-h100x2.env}"
 
 if [[ -f "$ENV_FILE" && ! -r "$ENV_FILE" ]]; then
@@ -32,7 +33,7 @@ MODEL="${MODEL:-Qwen/Qwen3.8-27B}"
 SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-qwen3.8-27b}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8000}"
-PID_FILE="${PID_FILE:-$SCRIPT_DIR/vllm-qwen38-h100x2.pid}"
+PID_FILE="${PID_FILE:-$REPO_ROOT/vllm-qwen38-h100x2.pid}"
 
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1}"
 
@@ -71,8 +72,8 @@ if [[ -n "${VLLM_BIN:-}" ]]; then
   fi
 elif command -v vllm >/dev/null 2>&1; then
   VLLM_BIN="$(command -v vllm)"
-elif [[ -x "$SCRIPT_DIR/.venv/bin/vllm" ]]; then
-  VLLM_BIN="$SCRIPT_DIR/.venv/bin/vllm"
+elif [[ -x "$REPO_ROOT/.venv/bin/vllm" ]]; then
+  VLLM_BIN="$REPO_ROOT/.venv/bin/vllm"
 else
   cat >&2 <<'ERR'
 ERROR: 'vllm' executable not found.
@@ -80,7 +81,7 @@ ERROR: 'vllm' executable not found.
   vLLM may not be installed on this machine. Install it first (see README):
     uv venv && source .venv/bin/activate && uv pip install -U vllm --torch-backend=auto
   Or point VLLM_BIN at an existing install:
-    VLLM_BIN=/path/to/venv/bin/vllm ./run-qwen38-27b-h100x2.sh
+    VLLM_BIN=/path/to/venv/bin/vllm ./targets/qwen38-27b-h100x2.sh
 ERR
   exit 1
 fi
@@ -122,7 +123,7 @@ if [[ "$MODEL" == "Qwen/Qwen3.8-27B" ]]; then
   min_vram_mib="$(nvidia-smi -i "$CUDA_VISIBLE_DEVICES" --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | sort -n | head -1)"
   if [[ "$min_vram_mib" =~ ^[0-9]+$ ]] && (( min_vram_mib < 70000 )); then
     echo "ERROR: not enough VRAM for $MODEL: smallest selected GPU has ${min_vram_mib} MiB, need ~81920 MiB per GPU." >&2
-    echo "       For 24 GB cards use ./run-qwen38-27b-4090x2.sh (FP8) instead." >&2
+    echo "       For 24 GB cards use ./targets/qwen38-27b-4090x2.sh (FP8) instead." >&2
     exit 1
   fi
 fi

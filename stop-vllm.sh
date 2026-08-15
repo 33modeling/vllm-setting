@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Stop the vLLM server started by run-qwen36-27b-fp8.sh and release GPU memory.
+# Stop the vLLM server started by any targets/*.sh script and release GPU memory.
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 

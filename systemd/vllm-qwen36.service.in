@@ -7,7 +7,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=__WORKDIR__
 Environment=PYTHONUNBUFFERED=1
-ExecStart=__WORKDIR__/run-qwen36-27b-fp8.sh
+ExecStart=__WORKDIR__/targets/qwen36-27b-4090x2.sh
 ExecStop=__WORKDIR__/stop-vllm.sh
 Restart=on-failure
 RestartSec=10

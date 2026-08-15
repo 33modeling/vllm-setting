@@ -1,45 +1,66 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 2x RTX 4090 single-user coding profile for Qwen3.6-27B.
-# Copy .env.example to .env to override defaults without editing this file.
+# Qwen3.8-27B FP8 on 2x RTX 4090 24GB.
+#
+# BF16 weights (~54 GB) do not fit in 48 GB, so this profile serves the official
+# block-wise FP8 checkpoint: ~28 GB of weights, 14 GB per rank at TP=2, leaving
+# room for KV cache. FP8 needs compute capability >= 8.9, which Ada (sm89) has.
+# Single-user coding defaults, matching targets/qwen36-27b-4090x2.sh.
+#
+# Knobs come from the environment or from qwen38-27b-4090x2.env next to this
+# script. The shared .env is NOT sourced — it pins the Qwen3.6 model and would
+# silently override MODEL here.
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/qwen38-27b-4090x2.env}"
 
-if [[ -f "$SCRIPT_DIR/.env" && ! -r "$SCRIPT_DIR/.env" ]]; then
-  echo "ERROR: $SCRIPT_DIR/.env exists but is not readable by user '$(id -un)'." >&2
-  echo "       Fix permissions (chmod 644 .env) or run as the file owner." >&2
+if [[ -f "$ENV_FILE" && ! -r "$ENV_FILE" ]]; then
+  echo "ERROR: $ENV_FILE exists but is not readable by user '$(id -un)'." >&2
+  echo "       Fix permissions (chmod 644 '$ENV_FILE') or run as the file owner." >&2
   exit 1
 fi
 
-if [[ -f "$SCRIPT_DIR/.env" ]]; then
+if [[ -f "$ENV_FILE" ]]; then
   set -a
   # shellcheck source=/dev/null
-  source "$SCRIPT_DIR/.env"
+  source "$ENV_FILE"
   set +a
 fi
 
-MODEL="${MODEL:-Qwen/Qwen3.6-27B-FP8}"
-SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-qwen3.6-27b-fp8}"
+MODEL="${MODEL:-Qwen/Qwen3.8-27B-FP8}"
+SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-qwen3.8-27b-fp8}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8000}"
-PID_FILE="${PID_FILE:-$SCRIPT_DIR/vllm.pid}"
+PID_FILE="${PID_FILE:-$REPO_ROOT/vllm-qwen38-4090x2.pid}"
 
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1}"
 
 TP_SIZE="${TP_SIZE:-2}"
+# 48 GB total minus ~28 GB of weights leaves roughly 15 GB of KV budget.
+# 65536 is the stable default; 131072 usually fits too because only 16 of the
+# 64 layers keep a growing KV cache. Drop to 32768 first if you hit OOM.
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-65536}"
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.90}"
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-2}"
 MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-8192}"
 DTYPE="${DTYPE:-auto}"
+# Same policy as the Qwen3.6 profile: only 1 layer in 4 keeps a growing KV
+# cache, so bf16 KV fits at 65536 and avoids the fp8 quality hit. Switch to
+# fp8 when you push MAX_MODEL_LEN to 131072.
 KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-auto}"
 
 ENABLE_PREFIX_CACHING="${ENABLE_PREFIX_CACHING:-1}"
 ENABLE_CHUNKED_PREFILL="${ENABLE_CHUNKED_PREFILL:-1}"
+# No NVLink between consumer cards — the custom all-reduce kernel over PCIe is
+# a known hang source, so keep it off.
 DISABLE_CUSTOM_ALL_REDUCE="${DISABLE_CUSTOM_ALL_REDUCE:-1}"
 ENABLE_TOOL_CALLS="${ENABLE_TOOL_CALLS:-1}"
 TRUST_REMOTE_CODE="${TRUST_REMOTE_CODE:-0}"
+# Qwen3.8 is natively multimodal, but the vision tower costs VRAM this box does
+# not have to spare. Set to 0 if you actually need image/video input.
+LANGUAGE_MODEL_ONLY="${LANGUAGE_MODEL_ONLY:-1}"
 
 # --- Preflight checks: fail fast with actionable messages -------------------
 
@@ -51,8 +72,8 @@ if [[ -n "${VLLM_BIN:-}" ]]; then
   fi
 elif command -v vllm >/dev/null 2>&1; then
   VLLM_BIN="$(command -v vllm)"
-elif [[ -x "$SCRIPT_DIR/.venv/bin/vllm" ]]; then
-  VLLM_BIN="$SCRIPT_DIR/.venv/bin/vllm"
+elif [[ -x "$REPO_ROOT/.venv/bin/vllm" ]]; then
+  VLLM_BIN="$REPO_ROOT/.venv/bin/vllm"
 else
   cat >&2 <<'ERR'
 ERROR: 'vllm' executable not found.
@@ -60,12 +81,22 @@ ERROR: 'vllm' executable not found.
   vLLM may not be installed on this machine. Install it first (see README):
     uv venv && source .venv/bin/activate && uv pip install -U vllm --torch-backend=auto
   Or point VLLM_BIN at an existing install:
-    VLLM_BIN=/path/to/venv/bin/vllm ./run-qwen36-27b-fp8.sh
+    VLLM_BIN=/path/to/venv/bin/vllm ./targets/qwen38-27b-4090x2.sh
 ERR
   exit 1
 fi
 
-# 2) GPUs: need a driver and at least as many GPUs as CUDA_VISIBLE_DEVICES/TP_SIZE.
+# 2) vLLM version: Qwen3.8 is a hybrid (linear attention on 48 of 64 layers)
+#    and needs 0.17.0+. Warn rather than block — version strings vary on nightlies.
+vllm_version="$("$VLLM_BIN" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+if [[ -n "$vllm_version" ]]; then
+  if [[ "$(printf '%s\n0.17.0\n' "$vllm_version" | sort -V | head -1)" != "0.17.0" ]]; then
+    echo "WARNING: vLLM $vllm_version detected; Qwen3.8 needs 0.17.0+ for its hybrid" >&2
+    echo "         attention layers. Expect an unsupported-architecture error." >&2
+  fi
+fi
+
+# 3) GPUs: need a driver and at least as many GPUs as CUDA_VISIBLE_DEVICES/TP_SIZE.
 if ! command -v nvidia-smi >/dev/null 2>&1; then
   echo "ERROR: nvidia-smi not found — no NVIDIA driver on this machine?" >&2
   echo "       This config targets 2x RTX 4090; run it on the GPU server." >&2
@@ -82,38 +113,50 @@ fi
 for gpu_idx in "${requested_gpus[@]}"; do
   if ! [[ "$gpu_idx" =~ ^[0-9]+$ ]] || (( gpu_idx >= gpu_count )); then
     echo "ERROR: CUDA_VISIBLE_DEVICES contains '$gpu_idx' but this machine only has GPU indexes 0..$((gpu_count - 1))." >&2
-    echo "       Fix CUDA_VISIBLE_DEVICES in .env (list GPUs with: nvidia-smi -L)." >&2
+    echo "       Fix CUDA_VISIBLE_DEVICES in $ENV_FILE (list GPUs with: nvidia-smi -L)." >&2
     exit 1
   fi
 done
 
-# 3) VRAM: the default 27B-FP8 model needs a ~24 GB card per TP rank.
-if [[ "$MODEL" == "Qwen/Qwen3.6-27B-FP8" ]]; then
+# 4) FP8 weights need compute capability >= 8.9 (Ada, Hopper, Blackwell).
+#    Turing/Ampere cards silently fall over on the block-wise FP8 kernels.
+min_cc="$(nvidia-smi -i "$CUDA_VISIBLE_DEVICES" --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | sort -V | head -1)"
+if [[ "$min_cc" =~ ^[0-9]+\.[0-9]+$ ]]; then
+  if awk -v cc="$min_cc" 'BEGIN { exit !(cc < 8.9) }'; then
+    echo "ERROR: FP8 needs compute capability >= 8.9; the weakest selected GPU is sm${min_cc/./}." >&2
+    echo "       Ampere and older cannot run $MODEL. Use a GGUF build via llama.cpp instead" >&2
+    echo "       (see the 2080 Ti section of README.md)." >&2
+    exit 1
+  fi
+fi
+
+# 5) VRAM: FP8 weights are ~28 GB, so each rank needs a 24 GB card.
+if [[ "$MODEL" == "Qwen/Qwen3.8-27B-FP8" ]]; then
   min_vram_mib="$(nvidia-smi -i "$CUDA_VISIBLE_DEVICES" --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | sort -n | head -1)"
   if [[ "$min_vram_mib" =~ ^[0-9]+$ ]] && (( min_vram_mib < 20000 )); then
     echo "ERROR: not enough VRAM for $MODEL: smallest selected GPU has ${min_vram_mib} MiB, need ~24576 MiB per GPU." >&2
-    echo "       This config targets 2x RTX 4090. Set a smaller MODEL in .env, or run on the GPU server." >&2
+    echo "       Set a smaller MODEL in $ENV_FILE, or run on the GPU server." >&2
     exit 1
   fi
 fi
 
-# 4) MODEL: a local path must exist; a HuggingFace ID is downloaded on first run.
+# 6) MODEL: a local path must exist; a HuggingFace ID is downloaded on first run.
 if [[ "$MODEL" == /* || "$MODEL" == ./* ]]; then
   if [[ ! -e "$MODEL" ]]; then
     echo "ERROR: MODEL points to a local path that does not exist: $MODEL" >&2
-    echo "       Fix MODEL in .env, or use a HuggingFace ID to auto-download." >&2
+    echo "       Fix MODEL in $ENV_FILE, or use a HuggingFace ID to auto-download." >&2
     exit 1
   fi
 fi
 
-# 5) Port must be free.
+# 7) Port must be free.
 if ss -tln 2>/dev/null | awk '{print $4}' | grep -q ":$PORT\$"; then
   echo "ERROR: port $PORT is already in use — is another server running?" >&2
-  echo "       Stop it with ./stop-vllm.sh or change PORT in .env." >&2
+  echo "       Stop it with PID_FILE='$PID_FILE' ./stop-vllm.sh or change PORT." >&2
   exit 1
 fi
 
-# 6) Soft warnings: small /dev/shm breaks NCCL; low disk breaks the first download.
+# 8) Soft warnings: small /dev/shm breaks NCCL; low disk breaks the first download.
 shm_kib="$(df -k /dev/shm 2>/dev/null | awk 'NR==2 {print $2}')"
 if [[ "$shm_kib" =~ ^[0-9]+$ ]] && (( shm_kib < 1048576 )); then
   echo "WARNING: /dev/shm is only $((shm_kib / 1024)) MiB; NCCL may fail with TP_SIZE=$TP_SIZE." >&2
@@ -123,7 +166,7 @@ if [[ "$MODEL" != /* && "$MODEL" != ./* ]]; then
   if [[ ! -d "$hf_hub_dir" ]]; then
     avail_gib="$(df -BG --output=avail "$HOME" 2>/dev/null | awk 'NR==2 {gsub(/G/,""); print $1}')"
     if [[ "$avail_gib" =~ ^[0-9]+$ ]] && (( avail_gib < 40 )); then
-      echo "WARNING: model not downloaded yet and only ${avail_gib} GiB free — the default model needs ~30 GiB." >&2
+      echo "WARNING: model not downloaded yet and only ${avail_gib} GiB free — FP8 weights need ~30 GiB." >&2
     fi
   fi
 fi
@@ -143,8 +186,11 @@ args=(
   --dtype "$DTYPE"
   --kv-cache-dtype "$KV_CACHE_DTYPE"
   --reasoning-parser qwen3
-  --language-model-only
 )
+
+if [[ "$LANGUAGE_MODEL_ONLY" == "1" ]]; then
+  args+=(--language-model-only)
+fi
 
 if [[ "$ENABLE_PREFIX_CACHING" == "1" ]]; then
   args+=(--enable-prefix-caching)
@@ -178,8 +224,12 @@ Starting vLLM
   max batched tokens:     $MAX_NUM_BATCHED_TOKENS
   gpu memory utilization: $GPU_MEMORY_UTILIZATION
   kv cache dtype:         $KV_CACHE_DTYPE
+  language model only:    $LANGUAGE_MODEL_ONLY
+  env file:               $ENV_FILE
   pid file:               $PID_FILE
   vllm bin:               $VLLM_BIN
+
+  stop with: PID_FILE='$PID_FILE' PORT=$PORT ./stop-vllm.sh
 EOF
 
 echo "$$" > "$PID_FILE"
