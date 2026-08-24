@@ -167,14 +167,22 @@ flowchart TD
 
 모든 스크립트가 `set -a; source <env파일>; set +a` 뒤에 `VAR="${VAR:-기본값}"`을 두는 동일한 프렐류드를 쓴다. 덕분에 설정 파일이 아예 없어도 내장 기본값으로 동작하며, 설정 파일은 "차이나는 값만" 담으면 된다.
 
-**대가 (실측):** `source`가 실행하는 평문 대입은 **환경에서 상속받은 값을 무조건 덮어쓴다.** 따라서 실제 우선순위는 `${VAR:-...}`가 암시하는 "명령줄 > 파일"이 아니라 **설정 파일 > 명령줄/환경 > 내장 기본값**이다. 검증:
+**우선순위는 명령줄 > 설정 파일 > 내장 기본값이다.** `source`가 실행하는 평문 대입은
+환경에서 상속받은 값을 덮어쓰므로, 각 로더가 `source` 직전에 `env -0`으로 환경을 찍어 두고
+직후에 되돌린다. 검증:
 
 ```
 $ PORT=9999 ./health-check.sh
-Checking vLLM at http://127.0.0.1:8000/v1        # 9999가 아니라 .env의 8000
+Checking vLLM at http://127.0.0.1:9999/v1        # 명령줄 값이 이긴다
+
+$ ./health-check.sh
+Checking vLLM at http://127.0.0.1:8000/v1        # 안 주면 .env 값
 ```
 
-이 성질이 D5의 대가를 실제 고장으로 바꾼다(§4.5, [CODE.md](CODE.md) §8 대조표 참조).
+**2026-08-25 이전에는 반대였다** — 복원 단계가 없어 실제 우선순위가 **설정 파일 > 명령줄**이었고
+`PORT=9999 ./health-check.sh`가 `.env`의 8000을 그대로 썼다. 문서 세 곳이 권하던
+"값을 명령줄로 넘겨라"가 통하지 않았고, 이것이 D5의 대가를 실제 고장으로 만들었다.
+`43d6a49`에서 수정(로더 12개 전부, 변수 전수 확인).
 
 ### D2. 하드웨어 구성 하나 = 스크립트 하나
 
@@ -201,13 +209,18 @@ exit=1
 
 PID 파일 하나만 믿으면 파일이 날아갔을 때 GPU 메모리가 물린 채 남는다. 그래서 `stop-vllm.sh`는 세 경로로 대상을 찾고(PID 파일 → `ss`의 포트 리스너 → `ps` 전체 스캔), 찾은 각 PID에 대해 `pgrep -P`로 자식을 재귀 수집한 뒤 트리째 종료한다. SIGTERM 후 `TIMEOUT_SECONDS`(기본 30초)를 기다리고 남으면 SIGKILL한다.
 
-**대가** — 세 번째 경로가 넓다. 조건은 "cmdline에 `vllm`과 `serve`가 모두 있고, `$PORT`·`$MODEL`·`$SERVED_MODEL_NAME` 중 하나가 포함"이다. 세 vLLM 타깃이 모두 포트 8000을 쓰므로, **Qwen3.6을 멈추려고 실행한 명령이 같은 포트의 Qwen3.8 서버를 잡을 수 있다.** 반대로 이 넓음 덕분에 D1의 클로버링에도 불구하고 `PID_FILE=... ./stop-vllm.sh`가 실제로는 잘 동작한다(`PID_FILE`은 `.env.example`에 없어서 클로버되지 않는다).
+**대가** — 세 번째 경로가 넓다. 조건은 "cmdline에 `vllm`과 `serve`가 모두 있고, `$PORT`·`$MODEL`·`$SERVED_MODEL_NAME` 중 하나가 포함"이다. 세 vLLM 타깃이 모두 포트 8000을 쓰므로, **Qwen3.6을 멈추려고 실행한 명령이 같은 포트의 Qwen3.8 서버를 잡을 수 있다.** (`PID_FILE=... ./stop-vllm.sh`로 대상을 좁히는 것은 `43d6a49` 이후 정상 동작한다 — 그 전에도 `PID_FILE`이 `.env.example`에 없어 우연히 클로버되지 않았을 뿐이다.)
 
 ### D5. 설정 파일을 두 갈래로 나눈 이유
 
-루트 `.env`는 `MODEL=Qwen/Qwen3.6-27B-FP8`을 고정한다. Qwen3.8 타깃이 이 파일을 같이 읽으면 D1의 클로버링 때문에 모델이 조용히 Qwen3.6으로 바뀐다. 그래서 Qwen3.8 타깃 두 개는 루트 `.env`를 **읽지 않고** `targets/<타깃>.env`만 읽는다.
+루트 `.env`는 `MODEL=Qwen/Qwen3.6-27B-FP8`을 고정한다. Qwen3.8 타깃이 이 파일을 같이 읽으면
+모델이 조용히 Qwen3.6으로 바뀐다. 그래서 Qwen3.8 타깃 두 개는 루트 `.env`를 **읽지 않고**
+`targets/<타깃>.env`만 읽는다.
 
-**대가 (실증됨)** — 운영층 스크립트는 여전히 루트 `.env`만 읽는다. 기존 문서와 `targets/*.env.example` 주석은 이 간극을 "값을 명령줄로 넘겨라"로 해결하라고 안내하지만, D1 때문에 **그 안내가 통하지 않는다.**
+**대가** — 운영층 스크립트는 여전히 루트 `.env`만 읽는다. 기존 문서와 `targets/*.env.example`
+주석은 이 간극을 "값을 명령줄로 넘겨라"로 해결하라고 안내하는데, `43d6a49` 이후 **그 안내가
+실제로 통한다**(`SERVED_MODEL_NAME=qwen3.8-27b ./benchmark-smoke.sh` → `Model: qwen3.8-27b`).
+그 전에는 D1 때문에 통하지 않았다.
 
 ```
 $ SERVED_MODEL_NAME=qwen3.8-27b ./benchmark-smoke.sh
@@ -292,4 +305,4 @@ Codex 쪽에는 **마이그레이션 책임**이 하나 더 붙어 있다. 최�
     64k
   ```
 - **새 에이전트 연동 추가** — `install-*-config.sh` 패턴을 따른다: `.env` 로드 → `<AGENT>_MODEL`/`<AGENT>_BASE_URL`/`<AGENT>_CONFIG` 오버라이드 → 백업 → 자기 소유 항목만 갱신 → 사용법 출력.
-- **Qwen3.8용 systemd 유닛** — 현재 없다. `systemd/vllm-qwen36.service.in`을 복사해 `ExecStart` 경로와 `ExecStop`의 `PID_FILE` 전달을 바꾸면 된다(§4.4의 클로버링 예외 덕분에 `PID_FILE`은 `Environment=`로 넘길 수 있다).
+- **Qwen3.8용 systemd 유닛** — 현재 없다. `systemd/vllm-qwen36.service.in`을 복사해 `ExecStart` 경로와 `ExecStop`의 `PID_FILE` 전달을 바꾸면 된다(`43d6a49` 이후 환경 변수가 설정 파일을 이기므로 `PID_FILE`을 `Environment=`로 넘기면 된다).
