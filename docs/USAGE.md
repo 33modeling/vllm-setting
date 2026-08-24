@@ -9,7 +9,7 @@
 | 항목 | 요구 | 확인 |
 |---|---|---|
 | OS | Linux (GNU coreutils 필요) | `df --output=avail`이 동작하면 OK |
-| 셸 | bash 4 이상 | `bash --version` |
+| 셸 | bash 4.4 이상 (설정 로드가 `mapfile -d`를 씀) | `bash --version` |
 | NVIDIA 드라이버 | 필수 | `nvidia-smi -L` |
 | `curl` | 필수 | `command -v curl` |
 | `ss` (iproute2) | 사실상 필수 | `command -v ss` |
@@ -47,7 +47,7 @@ uv pip install -U vllm --torch-backend=auto
 VLLM_BIN=/opt/venvs/vllm/bin/vllm ./targets/qwen36-27b-4090x2.sh
 ```
 
-`VLLM_BIN`은 `.env.example`에 없는 변수라 명령줄 지정이 그대로 통한다(§4.4).
+명령 앞에 붙인 값은 설정 파일보다 우선한다(§4.4).
 
 ### 2.2 설정 파일 준비
 
@@ -114,7 +114,7 @@ MTP 투기적 디코딩(speculative decoding)을 켜려면:
 ENABLE_MTP=1 ./targets/qwen38-27b-h100x2.sh
 ```
 
-`ENABLE_MTP`은 `targets/*.env`를 만들지 않았다면 명령줄로 통한다. 만들었다면 그 파일에 `ENABLE_MTP=1`을 적어야 한다(§4.4).
+`targets/qwen38-27b-h100x2.env`에 `ENABLE_MTP=0`이 적혀 있어도 명령줄 값이 이긴다(§4.4).
 
 검증과 종료는 §5.2의 방법을 쓴다.
 
@@ -251,29 +251,34 @@ START_NOW=1 ./install-systemd-user.sh                      # 설치 직후 resta
 
 ### 4.4 명령줄 오버라이드가 통하는가
 
-스크립트는 `set -a; source <설정파일>` 뒤에 `${VAR:-기본값}`을 쓴다. `source`의 평문 대입이 환경을 덮어쓰므로 실제 우선순위는 다음과 같다.
+스크립트는 `set -a; source <설정파일>` **직후에 소스 이전의 환경을 되돌려 놓고**, 그다음 `${VAR:-기본값}`으로 빈 자리를 채운다. 우선순위는 다음과 같다.
 
-**설정 파일 > 명령줄/환경 > 스크립트 내장 기본값**
+**명령줄(상속된 환경) > 설정 파일 > 스크립트 내장 기본값**
 
 확인:
 
 ```
 $ PORT=9999 ./health-check.sh
-Checking vLLM at http://127.0.0.1:8000/v1      # .env의 8000이 이김
+Checking vLLM at http://127.0.0.1:9999/v1      # 명령줄이 .env의 8000을 이김
+
+$ ./health-check.sh
+Checking vLLM at http://127.0.0.1:8000/v1      # 오버라이드가 없으면 .env 값
 ```
 
 | 상황 | 결과 |
 |---|---|
-| 설정 파일에 그 변수 줄이 **있음** | 명령줄 값이 **무시됨** |
+| 설정 파일에 그 변수 줄이 **있음** | 명령줄 값이 **적용됨** |
 | 설정 파일에 그 변수 줄이 **없음**(또는 주석) | 명령줄 값이 **적용됨** |
 | 설정 파일 자체가 없음 | 명령줄 값이 **적용됨** |
 
-`.env.example`을 그대로 쓴 상태 기준으로 정리하면,
+설정 파일을 읽는 12개 스크립트 전부에 대해, 각자 읽는 파일의 변수를 하나씩 넘겨 전수 확인했다. 루트 `.env` 20개, `targets/qwen38-27b-h100x2.env` 19개, `targets/qwen38-27b-4090x2.env` 17개, `qwen3-coder-2080ti/.env` 16개 — 전부 통한다. **예전에는 이 값들이 전부 무시됐다**(설정 파일이 이겼다). 그때 쓰던 우회법(`.env`를 잠시 치우기 등)은 더 이상 필요 없다.
 
-- **통하지 않는 20개**: `MODEL`, `SERVED_MODEL_NAME`, `CUDA_VISIBLE_DEVICES`, `TP_SIZE`, `HOST`, `PORT`, `MAX_MODEL_LEN`, `KV_CACHE_DTYPE`, `GPU_MEMORY_UTILIZATION`, `MAX_NUM_SEQS`, `MAX_NUM_BATCHED_TOKENS`, `ENABLE_PREFIX_CACHING`, `ENABLE_CHUNKED_PREFILL`, `DISABLE_CUSTOM_ALL_REDUCE`, `ENABLE_TOOL_CALLS`, `TRUST_REMOTE_CODE`, `TIMEOUT_SECONDS`, `WAIT_READY_SECONDS`, `REQUEST_TIMEOUT`, `CHAT_CHECK`
-- **통하는 것**: `DTYPE`, `PID_FILE`, `VLLM_BIN`, `BASE_URL`, `BENCH_MAX_TOKENS`, `ENV_FILE`, `CODEX_*` 4개, `OPENCODE_*` 4개, `SERVICE_NAME`, `START_NOW`, `LANGUAGE_MODEL_ONLY`, `ENABLE_MTP`, `MTP_NUM_SPECULATIVE_TOKENS`
+주의 두 가지.
 
-`agents.md`의 "방법 A"(`.env`에 `CODEX_MODEL` 영구 저장)를 적용하면 그 순간부터 "방법 B"(명령줄 1회성 지정)가 그 변수에 대해 동작을 멈춘다. 둘을 함께 쓰지 않는다.
+- 셸에서 `export` 하지 않은 변수는 자식 프로세스 환경에 들어가지 않아 오버라이드로 인식되지 않는다. `PORT=9999 ./health-check.sh`처럼 명령 앞에 붙이거나 `export PORT=9999`를 쓴다.
+- 반대로 `PORT`·`HOST`처럼 흔한 이름이 셸에 이미 `export` 돼 있으면 설정 파일보다 그 값이 우선한다. 설정 파일 값이 반영되지 않으면 `env | grep -E '^(PORT|HOST|MODEL)='`를 먼저 확인한다.
+
+`agents.md`의 "방법 A"(`.env`에 `CODEX_MODEL` 영구 저장)와 "방법 B"(명령줄 1회성 지정)는 함께 써도 된다. 같은 변수라면 방법 B가 이긴다.
 
 ### 4.5 타깃 스크립트에 추가 인자 넘기기
 
@@ -288,30 +293,37 @@ Checking vLLM at http://127.0.0.1:8000/v1      # .env의 8000이 이김
 
 ## 5. Qwen3.8 타깃 운영 (보조 스크립트와의 간극)
 
-### 5.1 문제
+### 5.1 무엇이 다른가
 
-`stop-vllm.sh`·`health-check.sh`·`benchmark-smoke.sh`는 루트 `.env`만 읽는다. 그 `.env`는 `SERVED_MODEL_NAME=qwen3.6-27b-fp8`을 담고 있고, §4.4 때문에 명령줄 오버라이드가 통하지 않는다. 따라서 기존 문서와 `targets/*.env.example` 주석의 아래 안내는 **모델명 부분이 동작하지 않는다.**
+`stop-vllm.sh`·`health-check.sh`·`benchmark-smoke.sh`는 루트 `.env`만 읽고, 그 `.env`는 `SERVED_MODEL_NAME=qwen3.6-27b-fp8`을 담고 있다. Qwen3.8 서버를 상대할 때는 다른 값을 **명령줄로 넘긴다.** §4.4대로 명령줄이 설정 파일을 이기므로, 기존 문서와 `targets/*.env.example` 주석의 아래 안내가 그대로 동작한다.
 
 ```bash
-PORT=8000 SERVED_MODEL_NAME=qwen3.8-27b ./health-check.sh   # 실제로는 qwen3.6-27b-fp8로 요청
+PORT=8000 SERVED_MODEL_NAME=qwen3.8-27b ./health-check.sh
 ```
 
-### 5.2 동작하는 방법
+### 5.2 명령 모음
 
-**종료 — 그대로 쓰면 된다.** `PID_FILE`은 `.env.example`에 없으므로 오버라이드가 통하고, `PORT`는 어차피 세 타깃 모두 8000이라 덮어써져도 결과가 같다.
+**종료.**
 
 ```bash
 PID_FILE=./vllm-qwen38-h100x2.pid ./stop-vllm.sh
 PID_FILE=./vllm-qwen38-4090x2.pid ./stop-vllm.sh
 ```
 
-**준비 확인 — curl을 직접 쓴다.**
+**준비·응답 확인.**
+
+```bash
+PORT=8000 SERVED_MODEL_NAME=qwen3.8-27b ./health-check.sh
+PORT=8000 SERVED_MODEL_NAME=qwen3.8-27b ./benchmark-smoke.sh
+```
+
+**서빙 이름만 확인하려면 curl로도 된다.**
 
 ```bash
 curl -fsS http://127.0.0.1:8000/v1/models | jq -r '.data[].id'
 ```
 
-**응답 확인 — curl을 직접 쓴다.**
+**응답 본문을 길게 보려면 curl을 직접 쓴다.**
 
 ```bash
 curl -fsS http://127.0.0.1:8000/v1/chat/completions \
@@ -320,19 +332,9 @@ curl -fsS http://127.0.0.1:8000/v1/chat/completions \
   | jq -r '.choices[0].message.content'
 ```
 
-`max_tokens`를 16보다 넉넉히 잡는다. 타깃 스크립트가 `--reasoning-parser qwen3`을 항상 붙이므로 thinking 출력이 예산을 먼저 소진하면 `content`가 빈 문자열로 나올 수 있다.
+`max_tokens`를 16보다 넉넉히 잡는다. 타깃 스크립트가 `--reasoning-parser qwen3`을 항상 붙이므로 thinking 출력이 예산을 먼저 소진하면 `content`가 빈 문자열로 나올 수 있다. `health-check.sh`의 chat 검사는 `max_tokens=16` 고정이라 같은 이유로 빈 출력이 나올 수 있고, 이는 실패가 아니다(§8.3).
 
-**보조 스크립트를 꼭 써야 한다면 `.env`를 잠시 치운다.**
-
-```bash
-mv .env .env.off
-SERVED_MODEL_NAME=qwen3.8-27b ./health-check.sh
-mv .env.off .env
-```
-
-`.env`가 없으면 모든 명령줄 값이 정상적으로 적용된다.
-
-**에이전트 등록은 정상 동작한다.** `CODEX_MODEL`·`OPENCODE_MODEL`은 `.env.example`에 활성 상태로 들어 있지 않다.
+**에이전트 등록.**
 
 ```bash
 CODEX_MODEL=qwen3.8-27b ./install-codex-config.sh
@@ -427,7 +429,7 @@ Environment=PID_FILE=__WORKDIR__/vllm-qwen38-h100x2.pid
 ExecStop=__WORKDIR__/stop-vllm.sh
 ```
 
-`PID_FILE`은 `.env.example`에 없어 클로버되지 않으므로 `Environment=`로 넘기는 방식이 실제로 동작한다. 설치는 `SERVICE_NAME=vllm-qwen38.service ./install-systemd-user.sh`인데, 현재 스크립트는 템플릿 경로가 `systemd/vllm-qwen36.service.in`으로 고정돼 있어 템플릿 파일을 바꾸거나 스크립트를 함께 수정해야 한다.
+`Environment=`로 넘긴 값은 스크립트가 상속받은 환경이므로 `.env`보다 우선한다(§4.4). 설치는 `SERVICE_NAME=vllm-qwen38.service ./install-systemd-user.sh`인데, 현재 스크립트는 템플릿 경로가 `systemd/vllm-qwen36.service.in`으로 고정돼 있어 템플릿 파일을 바꾸거나 스크립트를 함께 수정해야 한다.
 
 ## 8. 문제 해결
 
@@ -459,7 +461,7 @@ ExecStop=__WORKDIR__/stop-vllm.sh
 | 증상 | 원인 | 조치 |
 |---|---|---|
 | 기동 중 OOM | KV cache 예약 실패 | `MAX_MODEL_LEN`을 먼저 낮춘다(4090: `65536`→`32768`, H100: `262144`→`131072`). 다음이 `KV_CACHE_DTYPE=fp8`, 그다음이 `GPU_MEMORY_UTILIZATION=0.85` |
-| `vLLM did not become ready within Ns.` | 모델 로딩/다운로드가 `WAIT_READY_SECONDS`보다 오래 걸림 | `.env`에서 `WAIT_READY_SECONDS`를 늘린다(명령줄로는 안 됨, §4.4) |
+| `vLLM did not become ready within Ns.` | 모델 로딩/다운로드가 `WAIT_READY_SECONDS`보다 오래 걸림 | `WAIT_READY_SECONDS`를 늘린다. `.env`에 적거나 명령줄로 넘긴다(§4.4) |
 | `chat completion failed.` + 404 본문 | 요청 모델명이 서버 서빙 이름과 다름 | `curl .../v1/models`로 실제 이름 확인. Qwen3.8 타깃이면 §5.2 |
 | `health-check.sh`가 `chat completion OK`인데 아무것도 출력 안 함 | `max_tokens=16`을 thinking 출력이 소진해 `content`가 빔 | 정상 동작. 확인하려면 §5.2의 curl로 `max_tokens`를 늘려 본다 |
 | 폴링 중 `curl: (7) Failed to connect` 반복 | `curl -fsS`의 `-S` 때문에 실패가 매번 stderr로 출력됨 | 정상. 준비되면 멈춘다 |

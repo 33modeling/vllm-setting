@@ -4,17 +4,17 @@
 
 ## 1. 파일 인벤토리
 
-`git ls-files -s` + `wc -l` 실측. 추적 파일 31개, 2,633줄.
+`git ls-files -s` + `wc -l` 실측. 추적 파일 31개, 2,765줄.
 
 ### 1.1 루트
 
 | 파일 | 줄 | git mode | env 파일 로드 | 역할 |
 |---|---:|---|---|---|
-| `stop-vllm.sh` | 109 | 100755 | 루트 `.env` | 프로세스 트리 종료 |
-| `benchmark-smoke.sh` | 116 | 100755 | 루트 `.env` | 코딩 프롬프트 3종 벤치마크 |
-| `install-codex-config.sh` | 113 | 100755 | 루트 `.env` | Codex 프로필 파일 생성 + 구버전 마이그레이션 |
-| `install-opencode-config.sh` | 86 | 100755 | 루트 `.env` | opencode.json에 프로바이더 병합 |
-| `health-check.sh` | 84 | 100755 | 루트 `.env` | `/v1/models` 폴링 + chat completion |
+| `stop-vllm.sh` | 120 | 100755 | 루트 `.env` | 프로세스 트리 종료 |
+| `benchmark-smoke.sh` | 127 | 100755 | 루트 `.env` | 코딩 프롬프트 3종 벤치마크 |
+| `install-codex-config.sh` | 124 | 100755 | 루트 `.env` | Codex 프로필 파일 생성 + 구버전 마이그레이션 |
+| `install-opencode-config.sh` | 97 | 100755 | 루트 `.env` | opencode.json에 프로바이더 병합 |
+| `health-check.sh` | 95 | 100755 | 루트 `.env` | `/v1/models` 폴링 + chat completion |
 | `install-systemd-user.sh` | 48 | 100755 | **없음** | systemd user 유닛 설치 |
 | `use-profile.sh` | 41 | 100755 | **없음** (읽지 않고 덮어씀) | `profiles/*.env` → `.env` |
 | `README.md` | 93 | 100644 | — | 개요 |
@@ -25,9 +25,9 @@
 
 | 파일 | 줄 | git mode | 읽는 설정 파일 | PID 파일 기본값 |
 |---|---:|---|---|---|
-| `qwen38-27b-4090x2.sh` | 236 | 100755 | `targets/qwen38-27b-4090x2.env` | `<repo>/vllm-qwen38-4090x2.pid` |
-| `qwen38-27b-h100x2.sh` | 229 | 100755 | `targets/qwen38-27b-h100x2.env` | `<repo>/vllm-qwen38-h100x2.pid` |
-| `qwen36-27b-4090x2.sh` | 187 | 100755 | 루트 `.env` | `<repo>/vllm.pid` |
+| `qwen38-27b-4090x2.sh` | 247 | 100755 | `targets/qwen38-27b-4090x2.env` | `<repo>/vllm-qwen38-4090x2.pid` |
+| `qwen38-27b-h100x2.sh` | 240 | 100755 | `targets/qwen38-27b-h100x2.env` | `<repo>/vllm-qwen38-h100x2.pid` |
+| `qwen36-27b-4090x2.sh` | 198 | 100755 | 루트 `.env` | `<repo>/vllm.pid` |
 | `qwen38-27b-h100x2.env.example` | 45 | 100644 | — | — |
 | `qwen38-27b-4090x2.env.example` | 42 | 100644 | — | — |
 
@@ -45,10 +45,10 @@
 
 | 파일 | 줄 | git mode | 역할 |
 |---|---:|---|---|
-| `run-vllm-server.sh` | 123 | 100755 | AWQ 4-bit vLLM (대안 경로) |
-| `run-llama-server.sh` | 102 | 100755 | GGUF llama-server (권장 경로) |
-| `health-check.sh` | 56 | 100755 | `BACKEND`로 8080/8000 선택 |
-| `stop-server.sh` | 46 | 100755 | PID 파일 2개 순회 종료 |
+| `run-vllm-server.sh` | 134 | 100755 | AWQ 4-bit vLLM (대안 경로) |
+| `run-llama-server.sh` | 113 | 100755 | GGUF llama-server (권장 경로) |
+| `health-check.sh` | 67 | 100755 | `BACKEND`로 8080/8000 선택 |
+| `stop-server.sh` | 57 | 100755 | PID 파일 2개 순회 종료 |
 | `install-llama-cpp.sh` | 44 | 100755 | llama.cpp clone + CUDA 빌드 |
 | `download-gguf.sh` | 29 | 100755 | GGUF 이어받기 다운로드 |
 | `README.md` | 73 | 100644 | 이 하위 트리 전용 안내 |
@@ -90,42 +90,54 @@ REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 
 호출 위치와 무관하게 동작하므로 `cd`가 필요 없다.
 
-### 2.3 설정 로드와 실제 우선순위
+### 2.3 설정 로드와 우선순위
 
-12개 스크립트가 아래 패턴으로 설정 파일을 읽는다(로드하지 않는 4개: `use-profile.sh`, `install-systemd-user.sh`, `qwen3-coder-2080ti/download-gguf.sh`, `qwen3-coder-2080ti/install-llama-cpp.sh`).
+12개 스크립트가 아래 패턴으로 설정 파일을 읽는다(로드하지 않는 4개: `use-profile.sh`, `install-systemd-user.sh`, `qwen3-coder-2080ti/download-gguf.sh`, `qwen3-coder-2080ti/install-llama-cpp.sh`). 12곳의 블록은 파일 경로만 다르고 나머지는 글자 하나까지 같다.
 
 ```bash
 if [[ -f "$ENV_FILE" ]]; then
+  mapfile -d '' -t _preset_env < <(env -0)     # source 전 환경 스냅샷
   set -a
   source "$ENV_FILE"
   set +a
+  for _kv in "${_preset_env[@]}"; do           # 스냅샷을 되돌려 놓는다
+    [[ "$_kv" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || continue
+    case "${_kv%%=*}" in SHELLOPTS|BASHOPTS|PWD|OLDPWD) continue ;; esac
+    export "$_kv"
+  done
+  unset _preset_env _kv
 fi
 VAR="${VAR:-내장기본값}"
 ```
 
-`set -a`는 이후 대입되는 변수를 자동 export한다. **여기서 우선순위가 뒤집힌다.** `source`가 실행하는 `PORT=8000`은 평문 대입이라 환경에서 상속받은 값을 무조건 덮어쓴다. 그 뒤의 `${VAR:-...}`는 "설정 파일에도 없고 환경에도 없는 경우"만 채운다.
+`set -a`는 이후 대입되는 변수를 자동 export한다. 설정 파일의 `PORT=8000`은 평문 대입이라 `source` 시점에는 상속받은 값을 덮어쓰지만, 뒤따르는 복원 루프가 **`source` 이전에 이미 환경에 있던 변수만** 원래 값으로 되돌린다. 설정 파일에만 있는 변수는 그대로 살아남고, 양쪽 모두에 없는 변수는 `${VAR:-...}`가 채운다.
 
-**실제 우선순위: 설정 파일 > 명령줄/환경 > 내장 기본값**
+**우선순위: 명령줄(상속된 환경) > 설정 파일 > 내장 기본값**
 
 최소 재현:
 
 ```
-$ PORT=9999 bash -c 'set -a; source /home/kms/dev/vllm-setting/.env; set +a; echo "$PORT"'
-8000
-```
-
-실제 스크립트에서:
-
-```
 $ PORT=9999 ./health-check.sh
-Checking vLLM at http://127.0.0.1:8000/v1
+Checking vLLM at http://127.0.0.1:9999/v1
 
 $ SERVED_MODEL_NAME=qwen3.8-27b ./benchmark-smoke.sh
+Benchmark endpoint: http://127.0.0.1:8000/v1
+Model: qwen3.8-27b
+
+$ ./benchmark-smoke.sh                      # 오버라이드가 없으면 설정 파일 값
 Benchmark endpoint: http://127.0.0.1:8000/v1
 Model: qwen3.6-27b-fp8
 ```
 
-어떤 변수가 클로버되는지는 §7.5의 표에 정리했다. 요점은 **설정 파일에 그 줄이 있으면 명령줄이 무시된다**는 것이다.
+복원에서 빠지는 항목은 셋뿐이다.
+
+- 유효한 식별자가 아닌 환경 항목(`export -f`로 내보낸 함수의 `BASH_FUNC_*%%` 등)
+- 읽기 전용인 `SHELLOPTS`, `BASHOPTS` — 되돌리려 하면 `set -e`로 스크립트가 죽는다
+- 셸이 관리하는 `PWD`, `OLDPWD`
+
+따라서 설정 파일은 `PATH` 같은 상속 변수에 값을 **덧붙이는** 용도로는 쓸 수 없다(이 레포의 설정 파일 6종 중 그렇게 쓰는 것은 없다). 반대 방향의 함정도 있다. `PORT`·`HOST`처럼 흔한 이름이 셸에 이미 `export` 돼 있으면 그 값이 설정 파일을 이긴다.
+
+셸 변수는 `export` 되어 있어야 오버라이드로 인식된다. `PORT=9999 ./health-check.sh`처럼 명령 앞에 붙이거나 `export PORT=9999`를 쓴다. 전수 확인은 §7.5.
 
 ### 2.4 파일 읽기 권한 사전 확인
 
@@ -318,7 +330,7 @@ exec "$VLLM_BIN" "${args[@]}" "$@"
 
 ## 4. 루트 보조 스크립트
 
-### 4.1 `stop-vllm.sh` (109줄)
+### 4.1 `stop-vllm.sh` (120줄)
 
 읽는 변수: `PORT`(8000), `PID_FILE`(`$SCRIPT_DIR/vllm.pid`), `MODEL`(`Qwen/Qwen3.6-27B-FP8`), `SERVED_MODEL_NAME`(`qwen3.6-27b-fp8`), `TIMEOUT_SECONDS`(30).
 
@@ -348,9 +360,9 @@ No matching vLLM process found.
 exit=0
 ```
 
-두 번째는 `PORT=9999`가 `.env`의 `PORT=8000`으로 덮어써진 상태의 실행이다.
+두 번째는 `PORT=9999`가 `.env`의 `PORT=8000`을 이긴 상태의 실행이다(§2.3). 9999를 듣는 프로세스가 없으므로 결과는 같다.
 
-### 4.2 `health-check.sh` (84줄)
+### 4.2 `health-check.sh` (95줄)
 
 읽는 변수: `HOST`(0.0.0.0), `PORT`(8000), `SERVED_MODEL_NAME`(`qwen3.6-27b-fp8`), `WAIT_READY_SECONDS`(300), `REQUEST_TIMEOUT`(120), `CHAT_CHECK`(1), `BASE_URL`(유도값).
 
@@ -360,7 +372,7 @@ exit=0
 BASE_URL="${BASE_URL:-http://$CLIENT_HOST:$PORT/v1}"
 ```
 
-`BASE_URL`은 `.env.example`에 없으므로 **명령줄 오버라이드가 통하는 몇 안 되는 변수**다.
+`BASE_URL`은 `.env.example`에 없으므로, 설정 파일에 직접 적거나 명령줄로 넘겨야 하는 변수다.
 
 **임시 파일 3개** — `models_response`, `chat_body`, `chat_response`를 `mktemp`로 만들고 `trap ... EXIT`으로 정리한다.
 
@@ -383,7 +395,7 @@ exit=124   # timeout이 끊음 — 스크립트 자체는 300초까지 계속했
 
 성공하면 `chat completion OK`를 찍고, `jq`가 있으면 `.choices[0].message.content // empty`를 출력한다. **주의**: `max_tokens`가 16이고 타깃 스크립트가 `--reasoning-parser qwen3`을 항상 붙이므로, thinking이 켜진 모델에서는 예산이 reasoning 쪽으로 소진돼 `content`가 빈 문자열일 수 있다. 그래도 HTTP 200이라 스크립트는 `chat completion OK`로 판정한다.
 
-### 4.3 `benchmark-smoke.sh` (116줄)
+### 4.3 `benchmark-smoke.sh` (127줄)
 
 읽는 변수: `HOST`, `PORT`, `SERVED_MODEL_NAME`, `REQUEST_TIMEOUT`(**내장 기본 180**), `MAX_TOKENS`(← `BENCH_MAX_TOKENS`, 기본 512), `BASE_URL`.
 
@@ -414,17 +426,17 @@ awk "BEGIN { printf \"%.2f\", $completion_tokens / ($elapsed_ms / 1000) }"
 ```
 $ SERVED_MODEL_NAME=qwen3.8-27b ./benchmark-smoke.sh
 Benchmark endpoint: http://127.0.0.1:8000/v1
-Model: qwen3.6-27b-fp8
+Model: qwen3.8-27b
 
 GPU before:
-0, NVIDIA GeForce RTX 3050, 1286 MiB, 6144 MiB
+0, NVIDIA GeForce RTX 3050, 1160 MiB, 6144 MiB
 
 curl: (7) Failed to connect to 127.0.0.1 port 8000 after 0 ms: Couldn't connect to server
 binary-search: failed
 exit=1
 ```
 
-이 한 번의 실행이 세 가지를 동시에 보여준다: 클로버링(`Model:` 줄), `set -e`로 인한 조기 종료(`GPU after` 없음), `print_gpu`의 `nvidia-smi` CSV 포맷.
+이 한 번의 실행이 세 가지를 동시에 보여준다: 명령줄 오버라이드가 `.env`를 이기는 것(`Model:` 줄, §2.3 — 수정 전에는 여기가 `qwen3.6-27b-fp8`이었다), `set -e`로 인한 조기 종료(`GPU after` 없음), `print_gpu`의 `nvidia-smi` CSV 포맷.
 
 ### 4.4 `use-profile.sh` (41줄)
 
@@ -513,7 +525,7 @@ WantedBy=default.target
 
 ## 5. installer 2종
 
-### 5.1 `install-codex-config.sh` (113줄)
+### 5.1 `install-codex-config.sh` (124줄)
 
 **변수**
 
@@ -568,7 +580,7 @@ wire_api = "responses"
 
 프로바이더 키는 `vllm`으로 **하드코딩**돼 있다(`CODEX_PROFILE`은 파일 이름과 프로필 이름만 바꾼다). `wire_api = "responses"`이므로 서버 쪽 vLLM이 `/v1/responses`를 노출해야 한다.
 
-### 5.2 `install-opencode-config.sh` (86줄)
+### 5.2 `install-opencode-config.sh` (97줄)
 
 **변수**
 
@@ -756,14 +768,18 @@ kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
 
 ### 7.5 명령줄 오버라이드가 통하는가 (실측)
 
-§2.3의 클로버링 때문에, **`.env`(또는 해당 타깃의 `.env`)에 그 줄이 있으면 명령줄 값은 무시된다.**
+§2.3의 복원 루프 때문에 **설정 파일에 그 줄이 있어도 명령줄 값이 이긴다.** 12개 스크립트 각각에 대해, 그 스크립트가 읽는 설정 파일의 변수를 하나씩 `VAR=SENTINEL`로 넘겨 전수 확인했다.
 
-| 상태 | 변수 | 명령줄 오버라이드 |
-|---|---|---|
-| `.env.example`을 그대로 복사한 `.env`가 있을 때 | `MODEL`, `SERVED_MODEL_NAME`, `CUDA_VISIBLE_DEVICES`, `TP_SIZE`, `HOST`, `PORT`, `MAX_MODEL_LEN`, `KV_CACHE_DTYPE`, `GPU_MEMORY_UTILIZATION`, `MAX_NUM_SEQS`, `MAX_NUM_BATCHED_TOKENS`, `ENABLE_PREFIX_CACHING`, `ENABLE_CHUNKED_PREFILL`, `DISABLE_CUSTOM_ALL_REDUCE`, `ENABLE_TOOL_CALLS`, `TRUST_REMOTE_CODE`, `TIMEOUT_SECONDS`, `WAIT_READY_SECONDS`, `REQUEST_TIMEOUT`, `CHAT_CHECK` | **통하지 않음** (20개) |
-| 같은 상태 | `DTYPE`, `PID_FILE`, `VLLM_BIN`, `BASE_URL`, `BENCH_MAX_TOKENS`, `ENV_FILE`, `CODEX_*` 4개, `OPENCODE_*` 4개, `SERVICE_NAME`, `START_NOW`, `LANGUAGE_MODEL_ONLY`, `ENABLE_MTP`, `MTP_NUM_SPECULATIVE_TOKENS` | **통함** (`.env.example`에 줄이 없으므로) |
-| `.env`가 아예 없을 때 | 전부 | **통함** |
-| `agents.md` 방법 A대로 `.env`에 `CODEX_MODEL`을 넣은 뒤 | `CODEX_MODEL` | **통하지 않게 바뀜** — 방법 B가 그때부터 무력화 |
+| 스크립트 | 읽는 설정 파일 | 변수 | 결과 |
+|---|---|---:|---|
+| `health-check.sh`, `stop-vllm.sh`, `benchmark-smoke.sh`, installer 2종, `targets/qwen36-27b-4090x2.sh` | 루트 `.env` (`.env.example` 그대로) | 20 | 20/20 통함 |
+| `targets/qwen38-27b-h100x2.sh` | `targets/qwen38-27b-h100x2.env` | 19 | 19/19 통함 |
+| `targets/qwen38-27b-4090x2.sh` | `targets/qwen38-27b-4090x2.env` | 17 | 17/17 통함 |
+| `qwen3-coder-2080ti/` 4종 | `qwen3-coder-2080ti/.env` | 16 | 16/16 통함 |
+
+같은 측정이 수정 전에는 순서대로 0/20, 0/19, 0/17, 0/16이었다.
+
+설정 파일에 줄이 없는 변수(`DTYPE`, `PID_FILE`, `VLLM_BIN`, `BASE_URL`, `BENCH_MAX_TOKENS`, `ENV_FILE`, `CODEX_*`, `OPENCODE_*`, `SERVICE_NAME`, `START_NOW`)와 설정 파일 자체가 없는 경우는 전과 같이 통한다. `agents.md`의 방법 A(`.env`에 `CODEX_MODEL` 저장)와 방법 B(명령줄 1회 지정)도 이제 함께 쓸 수 있다 — B가 A를 이긴다.
 
 ## 8. 실측 대조표 — 기존 문서 서술 vs 실제 코드
 
@@ -771,20 +787,20 @@ kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
 
 | # | 출처 | 문서 서술 | 실제 | 근거 |
 |---:|---|---|---|---|
-| 1 | `design.md:18`, `targets.md:98,126`, `targets/*.env.example` 말미 | "값을 명령줄로 넘겨야 합니다" / `PORT=8000 SERVED_MODEL_NAME=qwen3.8-27b ./health-check.sh` | `.env`가 존재하면 **명령줄 값이 무시된다.** `set -a; source .env`의 평문 대입이 환경을 덮어씀 | `PORT=9999 ./health-check.sh` → `Checking vLLM at http://127.0.0.1:8000/v1`; `SERVED_MODEL_NAME=qwen3.8-27b ./benchmark-smoke.sh` → `Model: qwen3.6-27b-fp8` |
+| 1 | `design.md:18`, `targets.md:98,126`, `targets/*.env.example` 말미 | "값을 명령줄로 넘겨야 합니다" / `PORT=8000 SERVED_MODEL_NAME=qwen3.8-27b ./health-check.sh` | **일치(수정 완료).** 예전에는 `.env`가 있으면 명령줄 값이 무시됐다. §2.3의 복원 루프를 넣어 이 안내대로 동작한다 | `PORT=9999 ./health-check.sh` → `Checking vLLM at http://127.0.0.1:9999/v1`; `SERVED_MODEL_NAME=qwen3.8-27b ./benchmark-smoke.sh` → `Model: qwen3.8-27b` |
 | 2 | `design.md:14` | "`.env`는 … `use-profile.sh` … 가 전부 이 파일을 봅니다" | `use-profile.sh`는 `.env`를 `source`하지 않는다. 백업 후 덮어쓸 뿐 | `grep -n source use-profile.sh` → 무출력 |
 | 3 | `config.md:4` | `"실행 가이드 > 2. 최초 설정"의 항목별 점검대로` | 그런 섹션이 레포에 없다 | `grep -rn "실행 가이드" .` → 이 문장 자신만 히트 |
 | 4 | `targets.md:38-42` | 사전 점검 7번(compute capability)은 "4090 타깃"에 적용 | `qwen38-27b-4090x2.sh`에만 있고 **`qwen36-27b-4090x2.sh`에는 없다.** 후자도 FP8 체크포인트를 서빙한다 | 두 스크립트 정독 (§3.2) |
-| 5 | `targets.md:74`, `config.md` | qwen36의 `--language-model-only`를 "기본 적용되는 플래그"로 서술 | `qwen36-27b-4090x2.sh`에는 `LANGUAGE_MODEL_ONLY` 변수 자체가 없어 **끌 수 없다.** 다른 두 타깃은 변수로 제어됨 | `qwen36-27b-4090x2.sh:147` (조건 없는 배열 원소) |
-| 6 | `config.md:46` | `REQUEST_TIMEOUT` = `120`(헬스 체크) / `180`(벤치마크) | 180은 **스크립트 내장 기본값**일 뿐, `.env.example`·`profiles/64k.env`가 `120`을 담고 있어 기본 설정에서는 벤치마크도 120 | `.env.example:35`, `benchmark-smoke.sh:23` |
-| 7 | `config.md:49` | `BASE_URL` 기본값 `http://127.0.0.1:$PORT/v1` | `127.0.0.1`은 `HOST`가 `0.0.0.0`·`::`일 때만. 그 외에는 `HOST` 값을 그대로 씀 | `health-check.sh:27-33`, `benchmark-smoke.sh:26-32` |
+| 5 | `targets.md:74`, `config.md` | qwen36의 `--language-model-only`를 "기본 적용되는 플래그"로 서술 | `qwen36-27b-4090x2.sh`에는 `LANGUAGE_MODEL_ONLY` 변수 자체가 없어 **끌 수 없다.** 다른 두 타깃은 변수로 제어됨 | `qwen36-27b-4090x2.sh:158` (조건 없는 배열 원소) |
+| 6 | `config.md:46` | `REQUEST_TIMEOUT` = `120`(헬스 체크) / `180`(벤치마크) | 180은 **스크립트 내장 기본값**일 뿐, `.env.example`·`profiles/64k.env`가 `120`을 담고 있어 기본 설정에서는 벤치마크도 120 | `.env.example:35`, `benchmark-smoke.sh:34` |
+| 7 | `config.md:49` | `BASE_URL` 기본값 `http://127.0.0.1:$PORT/v1` | `127.0.0.1`은 `HOST`가 `0.0.0.0`·`::`일 때만. 그 외에는 `HOST` 값을 그대로 씀 | `health-check.sh:38-44`, `benchmark-smoke.sh:37-43` |
 | 8 | `config.md` 표 전체 | `.env` 항목 목록 | `DTYPE`·`PID_FILE`·`VLLM_BIN`·`BASE_URL`·`BENCH_MAX_TOKENS`는 문서에 있으나 **`.env.example`에는 없다.** 반대로 `ENV_FILE`·`SERVICE_NAME`·`START_NOW`·`VLLM_TP_SIZE`는 **문서에도 `.env.example`에도 없다** | §7 |
 | 9 | `README.md:87` | "`*.pid` … `.gitignore`로 제외" | 범용 `*.pid` 규칙이 없다. `vllm.pid`, `vllm-qwen38-*.pid`, `qwen3-coder-2080ti/*.pid` 3개뿐 | `git check-ignore -v custom.pid` → 무출력 |
 | 10 | `README.md:27` 빠른 시작 | `chmod +x *.sh targets/*.sh` | 16개 전부 이미 `100755`로 추적된다. 불필요(무해) | `git ls-files -s` |
 | 11 | `scripts.md:23` | `use-profile.sh`가 `.env`를 `chmod 600` 처리 | 맞음. 다만 타깃 스크립트의 권한 에러 안내는 `chmod 644`라 프로필 재활성화 시 원복된다 | `use-profile.sh:40` vs `targets/*.sh:12` |
 | 12 | `scripts.md:36` | "agents.md의 **Codex CLI > 환경 변수로 설정 바꾸기**" | agents.md에서 "환경 변수로 설정 바꾸기"는 `##` 최상위 절 | `grep -n '^#' docs/agents.md` |
-| 13 | `qwen38-27b-4090x2.sh:128` (에러 메시지) | `(see the 2080 Ti section of README.md)` | README에 2080 Ti 섹션이 없다. 실제 안내는 `docs/targets.md#qwen3-coder-2080ti` | `grep -n '^#' README.md` |
-| 14 | `design.md:27-54` 흐름도 | installer로 `install-codex-config.sh`만 표시 | `install-opencode-config.sh`도 `.env`를 읽는 동급 노드 | `install-opencode-config.sh:15-20` |
+| 13 | `qwen38-27b-4090x2.sh:139` (에러 메시지) | `(see the 2080 Ti section of README.md)` | README에 2080 Ti 섹션이 없다. 실제 안내는 `docs/targets.md#qwen3-coder-2080ti` | `grep -n '^#' README.md` |
+| 14 | `design.md:27-54` 흐름도 | installer로 `install-codex-config.sh`만 표시 | `install-opencode-config.sh`도 `.env`를 읽는 동급 노드 | `install-opencode-config.sh:15-31` |
 | 15 | `.env` 파일 상태 | — | 작업 트리의 `.env`는 `.env.example`과 **바이트 단위로 동일**하다 (`diff` 무출력, 둘 다 1,119바이트) | `diff .env .env.example` |
 
 ## 9. 진입점부터의 호출 흐름
@@ -932,6 +948,6 @@ $ for f in $(find . -name '*.sh'); do bash -n "$f"; done
 
 `shellcheck`는 이 머신에 설치돼 있지 않아 실행하지 못했다.
 
-**그 밖에 실행한 것** — `use-profile.sh` 3경로(§4.4), 타깃 3종 사전 점검 1단계와 `VLLM_BIN=/bin/false`로 4단계까지(§3.2), `stop-vllm.sh` 2회(§4.1), `health-check.sh`·`benchmark-smoke.sh` 클로버링 확인(§2.3, §4.3), installer 2종을 스크래치패드 경로로(§5), systemd 템플릿 `sed` 치환 dry-run(§4.5), `git check-ignore`(§8 #9), `diff .env .env.example`(§8 #15).
+**그 밖에 실행한 것** — `use-profile.sh` 3경로(§4.4), 타깃 3종 사전 점검 1단계와 `VLLM_BIN=/bin/false`로 4단계까지(§3.2), `stop-vllm.sh` 2회(§4.1), `health-check.sh`·`benchmark-smoke.sh` 오버라이드 확인(§2.3, §4.3), installer 2종을 스크래치패드 경로로(§5), systemd 템플릿 `sed` 치환 dry-run(§4.5), `git check-ignore`(§8 #9), `diff .env .env.example`(§8 #15).
 
 **실행 환경** — bash 5.2.21, GPU는 RTX 3050 1장(6 GiB), `vllm` 미설치, `.venv` 없음, 8000·8080 포트 모두 비어 있음, 실행 중인 `vllm serve` 프로세스 없음. 따라서 타깃 스크립트는 사전 점검 1단계(또는 `VLLM_BIN` 지정 시 4단계)에서 멈췄고 VRAM·포트 검사 이후는 도달하지 않았다. 모델 서빙 기동과 GPU 연산은 수행하지 않았다.

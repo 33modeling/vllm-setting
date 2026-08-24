@@ -14,10 +14,21 @@ if [[ -f "$REPO_ROOT/.env" && ! -r "$REPO_ROOT/.env" ]]; then
 fi
 
 if [[ -f "$REPO_ROOT/.env" ]]; then
+  # An inherited value (e.g. `PORT=9999 ./health-check.sh`) must win over the
+  # config file, whose plain `VAR=value` lines would otherwise clobber it.
+  # Snapshot the environment and restore it after sourcing, so the order is
+  # command line > config file > built-in default.
+  mapfile -d '' -t _preset_env < <(env -0)
   set -a
   # shellcheck source=/dev/null
   source "$REPO_ROOT/.env"
   set +a
+  for _kv in "${_preset_env[@]}"; do
+    [[ "$_kv" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || continue
+    case "${_kv%%=*}" in SHELLOPTS|BASHOPTS|PWD|OLDPWD) continue ;; esac
+    export "$_kv"
+  done
+  unset _preset_env _kv
 fi
 
 MODEL="${MODEL:-Qwen/Qwen3.6-27B-FP8}"
