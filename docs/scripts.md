@@ -2,6 +2,26 @@
 
 서빙 타깃과 무관하게 공통으로 쓰는 스크립트들입니다. 타깃별 실행 스크립트는 [targets.md](targets.md)를 보세요.
 
+## `recommend-settings.sh` — 하드웨어별 타깃 추천
+
+- `nvidia-smi`, `/proc/meminfo`, `nproc`, `df`로 GPU별 전체/여유 VRAM,
+  compute capability, RAM, CPU, `/dev/shm`, 디스크 여유를 감지합니다.
+- 추적 타깃 4개를 `perfect/good/marginal/too_tight`로 평가합니다. 전체 용량과
+  현재 여유 VRAM을 분리해 `ready`도 함께 표시합니다.
+- `system`, `recommend`(기본), `plan TARGET` 명령과 `--json`을 지원합니다.
+- `--gpu-count`, `--gpu-name`, `--vram-mib`, `--free-vram-mib`,
+  `--compute-cap`, `--ram-gib`, `--cpu-cores`로 다른 머신을 시뮬레이션합니다.
+- 읽기 전용입니다. `.env`를 쓰거나 runner를 실행하지 않습니다.
+
+```bash
+./recommend-settings.sh
+./recommend-settings.sh system --json | jq .
+./recommend-settings.sh plan qwen38-27b-h100x2
+./tests/recommend-settings-test.sh
+```
+
+판정 기준과 llmfit 비교는 [llmfit-comparison.md](llmfit-comparison.md)를 봅니다.
+
 ## `stop-vllm.sh` — 안전한 종료
 
 - `vllm.pid` → 포트 리스너(`ss`) → 프로세스 목록(`ps`) 순으로 vLLM 프로세스를 찾고, 자식 워커까지 재귀적으로 수집합니다.

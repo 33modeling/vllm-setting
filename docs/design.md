@@ -5,6 +5,9 @@
 ## 설계 원칙
 
 - **하드웨어 구성 하나 = 실행 스크립트 하나.** 조건 분기로 여러 하드웨어를 한 스크립트에 욱여넣지 않습니다. `targets/` 아래 스크립트는 서로 독립이고, 각자 자기 하드웨어에 맞는 기본값과 사전 점검을 들고 있습니다.
+- **추천과 실행을 분리합니다.** `recommend-settings.sh`는 하드웨어를 읽고 기존
+  타깃을 평가할 뿐, 설정 파일을 쓰거나 runner를 실행하지 않습니다. 추천 뒤에도
+  각 runner의 사전 점검과 실제 벤치마크가 최종 판단입니다.
 - **실행 전에 실패한다.** vLLM은 모델을 다 읽고 나서야 OOM으로 죽는 일이 잦습니다. 그래서 run 스크립트는 vllm 실행파일·GPU 개수·VRAM·compute capability·포트를 먼저 확인하고, 안 맞으면 원인과 해결 방법을 출력한 뒤 중단합니다.
 - **수동 실행과 서비스 실행이 같은 코드 경로.** systemd 유닛은 run/stop 스크립트를 그대로 감싸기만 합니다.
 - **종료는 이중 안전장치.** PID 파일 → 포트 리스너(`ss`) → 프로세스 목록(`ps`) 순으로 찾고 자식 워커까지 재귀 수집합니다. PID 파일이 날아가도 GPU 메모리가 물려 있는 상태로 남지 않습니다.
@@ -33,6 +36,10 @@ flowchart TD
     ENV --> RUN36["targets/qwen36-27b-4090x2.sh"]
     E38H["targets/qwen38-27b-h100x2.env"] --> RUN38H["targets/qwen38-27b-h100x2.sh"]
     E38C["targets/qwen38-27b-4090x2.env"] --> RUN38C["targets/qwen38-27b-4090x2.sh"]
+    HW["GPU/VRAM/RAM/CPU"] --> ADV["recommend-settings.sh"]
+    ADV -->|"fit + plan"| RUN36
+    ADV -->|"fit + plan"| RUN38H
+    ADV -->|"fit + plan"| RUN38C
     ENV --> STOP["stop-vllm.sh"]
     ENV --> HC["health-check.sh"]
     ENV --> BM["benchmark-smoke.sh"]

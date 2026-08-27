@@ -4,7 +4,7 @@
 
 ## 1. 파일 인벤토리
 
-`git ls-files -s` + `wc -l` 실측. 추적 파일 31개, 2,765줄.
+추적 파일과 이번 변경의 신규 파일을 합쳐 `wc -l`로 실측했다. 37개, 5,636줄.
 
 ### 1.1 루트
 
@@ -17,7 +17,8 @@
 | `health-check.sh` | 95 | 100755 | 루트 `.env` | `/v1/models` 폴링 + chat completion |
 | `install-systemd-user.sh` | 48 | 100755 | **없음** | systemd user 유닛 설치 |
 | `use-profile.sh` | 41 | 100755 | **없음** (읽지 않고 덮어씀) | `profiles/*.env` → `.env` |
-| `README.md` | 93 | 100644 | — | 개요 |
+| `recommend-settings.sh` | 639 | 100755 | **없음** | 하드웨어 감지, 추적 타깃 fit/readiness·설정 추천, JSON |
+| `README.md` | 113 | 100644 | — | 개요 |
 | `.env.example` | 40 | 100644 | — | 루트 공유 설정 템플릿 |
 | `.gitignore` | 14 | 100644 | — | 14개 규칙 |
 
@@ -54,9 +55,17 @@
 | `README.md` | 73 | 100644 | 이 하위 트리 전용 안내 |
 | `.env.example` | 23 | 100644 | 이 하위 트리 전용 설정 템플릿 |
 
+### 1.5 `tests/`, advisor 문서
+
+| 파일 | 줄 | git mode | 역할 |
+|---|---:|---|---|
+| `tests/recommend-settings-test.sh` | 124 | 100755 | 4090/H100/2080 Ti/3050/혼합 GPU/VRAM 점유/오류/JSON 회귀 테스트 |
+| `docs/llmfit-comparison.md` | 165 | 100644 | upstream 비교, 판정식, 범위와 유지보수 계약 |
+
 ## 2. 모든 스크립트가 공유하는 프렐류드
 
-16개 스크립트 전부가 아래 세 가지를 동일하게 갖는다(실측: `grep -c` 결과 16/16).
+18개 셸 스크립트 전부가 strict mode를 사용한다. 운영 스크립트 17개는 자기 위치를
+직접 계산하고, 테스트 스크립트는 같은 방식으로 `REPO_ROOT`를 계산한다.
 
 ### 2.1 셔뱅과 셸 옵션
 
@@ -69,7 +78,7 @@ set -euo pipefail
 
 ### 2.2 위치 해석
 
-16개 파일 전부 **글자 하나까지 같은 한 줄**을 쓴다.
+테스트를 제외한 17개 파일이 아래 `SCRIPT_DIR` 패턴을 쓴다.
 
 ```bash
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -92,7 +101,9 @@ REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 
 ### 2.3 설정 로드와 우선순위
 
-12개 스크립트가 아래 패턴으로 설정 파일을 읽는다(로드하지 않는 4개: `use-profile.sh`, `install-systemd-user.sh`, `qwen3-coder-2080ti/download-gguf.sh`, `qwen3-coder-2080ti/install-llama-cpp.sh`). 12곳의 블록은 파일 경로만 다르고 나머지는 글자 하나까지 같다.
+12개 스크립트가 아래 패턴으로 설정 파일을 읽는다. 기존 비로더 4개에
+`recommend-settings.sh`와 회귀 테스트가 추가됐으며, advisor는 감지값과 명령줄
+오버라이드만 읽는다. 12곳의 로드 블록은 파일 경로만 다르고 나머지는 같다.
 
 ```bash
 if [[ -f "$ENV_FILE" ]]; then
@@ -329,6 +340,34 @@ exec "$VLLM_BIN" "${args[@]}" "$@"
 ```
 
 ## 4. 루트 보조 스크립트
+
+### 4.0 `recommend-settings.sh` (639줄)
+
+설정 파일을 읽지 않고 시스템을 변경하지 않는 판정기다. 기본 명령은 `recommend`,
+그 밖에 `system`, `plan TARGET`과 `--json`을 제공한다.
+
+**감지** — `nvidia-smi`의 GPU별 index/name/전체·여유 VRAM/compute capability,
+`/proc/meminfo`의 RAM, `nproc`, `/dev/shm`과 홈 파일시스템 여유를 읽는다. 구형
+`nvidia-smi`가 compute capability 열을 지원하지 않으면 알려진 GPU 이름 일부에
+대해서만 보수적으로 보완한다.
+
+**멀티 GPU 집계** — TP rank의 하드 조건을 반영해 합계가 아니라 가장 작은 GPU의
+VRAM/free VRAM과 가장 낮은 compute capability를 쓴다. 모든 GPU 이름이 타깃의
+의도된 family와 맞을 때만 `perfect`, 용량만 맞으면 `good`이다. 전체 용량은 맞지만
+현재 free VRAM이 부족하거나 CC가 불명이면 `marginal`, 하드 조건 실패는
+`too_tight`이다. `ready`는 현재 바로 실행 가능한지를 별도 boolean으로 표현한다.
+
+**catalog** — 타깃 4개의 runner/model/backend, GPU 수, per-GPU VRAM/free VRAM,
+최소 CC, context/KV/sequence/batch/utilization을 associative array로 둔다. 순위 score는
+성능 점수가 아니라 fit band(300/200/100/0대) + 타깃 우선순위다.
+
+**시뮬레이션** — GPU 수/name/VRAM/free VRAM/CC 중 하나라도 오버라이드하면 동일한
+가상 GPU 배열을 만들고 JSON의 `system.simulated=true`로 표시한다. RAM과 CPU도
+독립 오버라이드할 수 있다.
+
+**출력** — 사람용 표는 실패 이유와 추천 runner를, JSON은 `system`,
+`recommendation`, 정렬된 `targets`와 requirements/settings를 제공한다. `.env`를
+쓰거나 runner를 실행하는 경로는 없다.
 
 ### 4.1 `stop-vllm.sh` (120줄)
 
@@ -796,7 +835,7 @@ kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
 | 7 | `config.md:49` | `BASE_URL` 기본값 `http://127.0.0.1:$PORT/v1` | `127.0.0.1`은 `HOST`가 `0.0.0.0`·`::`일 때만. 그 외에는 `HOST` 값을 그대로 씀 | `health-check.sh:38-44`, `benchmark-smoke.sh:37-43` |
 | 8 | `config.md` 표 전체 | `.env` 항목 목록 | `DTYPE`·`PID_FILE`·`VLLM_BIN`·`BASE_URL`·`BENCH_MAX_TOKENS`는 문서에 있으나 **`.env.example`에는 없다.** 반대로 `ENV_FILE`·`SERVICE_NAME`·`START_NOW`·`VLLM_TP_SIZE`는 **문서에도 `.env.example`에도 없다** | §7 |
 | 9 | `README.md:87` | "`*.pid` … `.gitignore`로 제외" | 범용 `*.pid` 규칙이 없다. `vllm.pid`, `vllm-qwen38-*.pid`, `qwen3-coder-2080ti/*.pid` 3개뿐 | `git check-ignore -v custom.pid` → 무출력 |
-| 10 | `README.md:27` 빠른 시작 | `chmod +x *.sh targets/*.sh` | 16개 전부 이미 `100755`로 추적된다. 불필요(무해) | `git ls-files -s` |
+| 10 | `README.md:27` 빠른 시작 | `chmod +x *.sh targets/*.sh` | 추적된 셸 파일은 이미 `100755`다. 불필요(무해) | `git ls-files -s` |
 | 11 | `scripts.md:23` | `use-profile.sh`가 `.env`를 `chmod 600` 처리 | 맞음. 다만 타깃 스크립트의 권한 에러 안내는 `chmod 644`라 프로필 재활성화 시 원복된다 | `use-profile.sh:40` vs `targets/*.sh:12` |
 | 12 | `scripts.md:36` | "agents.md의 **Codex CLI > 환경 변수로 설정 바꾸기**" | agents.md에서 "환경 변수로 설정 바꾸기"는 `##` 최상위 절 | `grep -n '^#' docs/agents.md` |
 | 13 | `qwen38-27b-4090x2.sh:139` (에러 메시지) | `(see the 2080 Ti section of README.md)` | README에 2080 Ti 섹션이 없다. 실제 안내는 `docs/targets.md#qwen3-coder-2080ti` | `grep -n '^#' README.md` |
@@ -887,16 +926,16 @@ systemctl --user stop vllm-qwen36.service
 | 명령 | 필수/선택 | 쓰는 곳 | 없을 때 |
 |---|---|---|---|
 | `bash` 4+ | 필수 | 전부 | — |
-| `nvidia-smi` | 필수 | run 스크립트 5개 | exit 1 (명시적 에러) |
+| `nvidia-smi` | run에는 필수, advisor에는 선택 | run 스크립트 5개, advisor | run은 exit 1, advisor는 GPU 0개로 판정 |
 | `ss` (iproute2) | 필수/선택 | 포트 점검(run), 종료 경로2(stop) | run: 점검이 조용히 통과 / stop: 경로2 건너뜀 |
 | `ps`, `pgrep` | 필수 | `stop-vllm.sh`, `stop-server.sh` | 종료 경로 실패 |
 | `curl` | 필수 | health-check 2종, benchmark, download-gguf | 명시적 에러 후 exit 1 |
-| `jq` | **선택** | health-check 2종 | 응답 본문 출력만 생략 |
+| `jq` | **선택** | health-check 2종, advisor 테스트 | 응답 본문 출력 생략 / 테스트 exit 77 |
 | `python3` | 필수 | `install-opencode-config.sh` | exit 1 |
 | `systemctl` | 필수 | `install-systemd-user.sh` | exit 1 |
 | `git`, `cmake`, `nvcc` | 필수 | `install-llama-cpp.sh` | exit 1 |
 | `awk`, `sed`, `grep`, `sort`, `head`, `tr`, `wc`, `df`, `date`, `mktemp`, `find`, `cp`, `mv`, `mkdir`, `chmod`, `rm` | 필수 | 전반 | — |
-| `nproc` | 필수 | `install-llama-cpp.sh` (`BUILD_JOBS`) | — |
+| `nproc` | 필수 | `install-llama-cpp.sh` (`BUILD_JOBS`), advisor CPU 감지 | advisor는 0으로 표시 가능 |
 | `vllm` | 필수 | 타깃 3종, 2080ti vLLM 경로 | exit 1 (설치 안내 포함) |
 | `llama-server` | 필수 | `run-llama-server.sh` | exit 1 |
 
@@ -905,6 +944,8 @@ GNU 확장에 의존하는 곳: `find -printf`(use-profile), `df -BG --output=av
 ### 10.2 내부 의존
 
 - `targets/*.sh` → 설정 파일. 다른 스크립트를 호출하지 않는다.
+- `recommend-settings.sh` → target catalog에서 runner 경로를 출력만 하며 호출하지 않는다.
+- `tests/recommend-settings-test.sh` → advisor JSON과 실제 runner 기본값을 읽어 catalog drift를 검사한다.
 - `stop-vllm.sh` / `health-check.sh` / `benchmark-smoke.sh` → 루트 `.env`만. 서로 호출하지 않는다.
 - `install-systemd-user.sh` → `systemd/vllm-qwen36.service.in`(없으면 exit 1) → 간접적으로 `targets/qwen36-27b-4090x2.sh`, `stop-vllm.sh`.
 - `use-profile.sh` → `profiles/*.env`.
@@ -924,7 +965,7 @@ GNU 확장에 의존하는 곳: `find -printf`(use-profile), `df -BG --output=av
 
 부작용이 없는 명령만 실행했다. 모델 서빙 기동, GPU 연산, 사용자 홈의 설정 파일 수정은 하지 않았다.
 
-**문법 검사 — 16/16 통과**
+**문법 검사 — 18/18 통과**
 
 ```
 $ for f in $(find . -name '*.sh'); do bash -n "$f"; done
@@ -933,6 +974,7 @@ $ for f in $(find . -name '*.sh'); do bash -n "$f"; done
 ./install-codex-config.sh                     OK
 ./install-opencode-config.sh                  OK
 ./install-systemd-user.sh                     OK
+./recommend-settings.sh                       OK
 ./qwen3-coder-2080ti/download-gguf.sh         OK
 ./qwen3-coder-2080ti/health-check.sh          OK
 ./qwen3-coder-2080ti/install-llama-cpp.sh     OK
@@ -944,10 +986,16 @@ $ for f in $(find . -name '*.sh'); do bash -n "$f"; done
 ./targets/qwen38-27b-4090x2.sh                OK
 ./targets/qwen38-27b-h100x2.sh                OK
 ./use-profile.sh                              OK
+./tests/recommend-settings-test.sh             OK
 ```
 
 `shellcheck`는 이 머신에 설치돼 있지 않아 실행하지 못했다.
 
-**그 밖에 실행한 것** — `use-profile.sh` 3경로(§4.4), 타깃 3종 사전 점검 1단계와 `VLLM_BIN=/bin/false`로 4단계까지(§3.2), `stop-vllm.sh` 2회(§4.1), `health-check.sh`·`benchmark-smoke.sh` 오버라이드 확인(§2.3, §4.3), installer 2종을 스크래치패드 경로로(§5), systemd 템플릿 `sed` 치환 dry-run(§4.5), `git check-ignore`(§8 #9), `diff .env .env.example`(§8 #15).
+**advisor 검증** — 회귀 테스트가 2x4090, 2xH100, 2x2080 Ti, 1x3050,
+VRAM 점유 상태, plan JSON, 잘못된 옵션/타깃, runner 존재와 핵심 기본값 drift를
+검사한다. 실제 RTX 3050 감지에서는 지원 타깃 없음으로 판정했고 서버를 실행하지
+않았다.
+
+**그 밖에 실행한 것** — `use-profile.sh` 3경로(§4.4), 타깃 3종 사전 점검, `stop-vllm.sh`, `health-check.sh`·`benchmark-smoke.sh` 오버라이드 확인, installer 2종 스크래치 검증, systemd 템플릿 dry-run, ignore와 env 대조.
 
 **실행 환경** — bash 5.2.21, GPU는 RTX 3050 1장(6 GiB), `vllm` 미설치, `.venv` 없음, 8000·8080 포트 모두 비어 있음, 실행 중인 `vllm serve` 프로세스 없음. 따라서 타깃 스크립트는 사전 점검 1단계(또는 `VLLM_BIN` 지정 시 4단계)에서 멈췄고 VRAM·포트 검사 이후는 도달하지 않았다. 모델 서빙 기동과 GPU 연산은 수행하지 않았다.

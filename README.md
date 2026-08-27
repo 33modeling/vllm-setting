@@ -15,6 +15,22 @@
 
 vLLM 타깃 셋은 모두 `http://localhost:8000/v1`, 2080 Ti 구성만 llama.cpp에 `http://127.0.0.1:8080/v1` 입니다.
 
+## 내 하드웨어에 맞는 설정 찾기
+
+먼저 advisor를 실행하면 GPU별 VRAM·여유 VRAM·compute capability와 RAM/CPU를
+감지해 이 레포의 타깃을 `perfect/good/marginal/too_tight`로 평가합니다.
+
+```bash
+./recommend-settings.sh                          # 타깃 전체 순위
+./recommend-settings.sh system --json | jq .     # 하드웨어 JSON
+./recommend-settings.sh plan qwen38-27b-4090x2   # 한 타깃의 설정·실행 계획
+```
+
+다른 서버를 미리 검토할 때는 GPU 수·이름·VRAM·compute capability를 오버라이드할
+수 있습니다. advisor는 설정 파일을 덮어쓰거나 서버를 실행하지 않습니다. 범용 모델
+탐색기 `llmfit`과의 역할 차이와 채택한 기능은
+**[docs/llmfit-comparison.md](docs/llmfit-comparison.md)** 에 정리했습니다.
+
 ## 빠른 시작
 
 기본 구성(2x RTX 4090 + Qwen3.6-27B-FP8) 기준입니다. 다른 하드웨어라면 [docs/targets.md](docs/targets.md)에서 해당 타깃 절을 보세요.
@@ -56,6 +72,7 @@ print(response.choices[0].message.content)
 | [docs/config.md](docs/config.md) | 설정 항목 전체 레퍼런스와 컨텍스트 튜닝 노트 |
 | [docs/agents.md](docs/agents.md) | Codex CLI · OpenCode · Claude Code 연동 |
 | [docs/design.md](docs/design.md) | 설계 원칙과 실행·데이터 흐름 |
+| [docs/llmfit-comparison.md](docs/llmfit-comparison.md) | llmfit 비교, advisor 판정 기준·한계·유지보수 규칙 |
 
 ## 코드 구성
 
@@ -68,6 +85,7 @@ vllm-setting/
 │   ├── qwen38-27b-h100x2.env.example
 │   └── qwen38-27b-4090x2.env.example
 ├── stop-vllm.sh                   # vLLM 프로세스 트리 종료 및 GPU 반환
+├── recommend-settings.sh          # 하드웨어 감지, 타깃 적합도·실행 설정 추천(JSON 지원)
 ├── health-check.sh                # /v1/models + chat completion 확인
 ├── benchmark-smoke.sh             # 코딩 프롬프트 3종 성능 스모크 테스트
 ├── use-profile.sh                 # profiles/*.env를 .env로 활성화(백업 포함)
@@ -81,6 +99,8 @@ vllm-setting/
 ├── systemd/
 │   └── vllm-qwen36.service.in     # systemd user 서비스 템플릿
 ├── docs/                          # 상세 문서
+├── tests/
+│   └── recommend-settings-test.sh # advisor 시뮬레이션·JSON 회귀 테스트
 └── qwen3-coder-2080ti/            # 2x RTX 2080 Ti용 별도 구성 (llama.cpp 권장)
 ```
 

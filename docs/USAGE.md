@@ -2,6 +2,35 @@
 
 설치부터 문제 해결까지, 실제 명령 단위로 정리한다. 타깃별 설정값의 근거는 [targets.md](targets.md), 변수 하나하나의 의미는 [config.md](config.md), 에이전트 연동 절차 원본은 [agents.md](agents.md)에 있다. 이 문서는 그 위에 **전체 옵션 목록·오버라이드 규칙·에러 메시지 대응표·타깃 추가 절차**를 더한다. 내부 로직은 [CODE.md](CODE.md)를 본다.
 
+## 0. 하드웨어와 타깃 먼저 확인
+
+설치나 모델 다운로드 전에 현재 머신에서 이 레포의 어느 타깃이 맞는지 확인한다.
+
+```bash
+./recommend-settings.sh
+./recommend-settings.sh system --json | jq .
+```
+
+추천된 타깃의 요구량, 권장 컨텍스트/KV/동시성, 실제 runner를 자세히 본다.
+
+```bash
+./recommend-settings.sh plan qwen38-27b-4090x2
+```
+
+GPU 서버에 접속하지 않고 가상 사양을 검토할 수도 있다.
+
+```bash
+./recommend-settings.sh \
+  --gpu-count 2 --gpu-name 'NVIDIA GeForce RTX 4090' \
+  --vram-mib 24564 --free-vram-mib 24564 --compute-cap 8.9
+```
+
+`too_tight`이면 해당 runner를 강행하지 않는다. `marginal`이면서 이유가 여유 VRAM
+부족이면 다른 GPU 프로세스를 먼저 종료한다. advisor는 정적 판정이므로 실제 실행은
+runner 사전 점검 → `health-check.sh` → `benchmark-smoke.sh` 순으로 검증한다.
+
+전체 판정식과 llmfit과의 차이는 [llmfit-comparison.md](llmfit-comparison.md)를 본다.
+
 ## 1. 사전 요구사항
 
 ### 1.1 공통
@@ -401,8 +430,12 @@ curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8000/v1/messages
 2. **`targets/<이름>.env.example`** — 같은 변수 집합을 주석과 함께.
 3. **`.gitignore`** — `targets/<이름>.env`와 PID 파일 이름 규칙을 추가한다. 현재 `.gitignore`에 범용 `*.pid` 규칙이 **없으므로**(확인: `git check-ignore custom.pid` → 무출력) PID 파일 이름을 반드시 명시해야 한다.
 4. **불변식 유지** — `set -euo pipefail`, `SCRIPT_DIR`/`REPO_ROOT` 해석 한 줄, `echo "$$" > "$PID_FILE"` 후 `exec ... "$@"`, 에러는 stderr에 원인+해결책 두 줄 후 `exit 1`.
-5. **문법 검사** — `bash -n targets/<이름>.sh`.
-6. **문서** — [targets.md](targets.md)에 절을 추가하고 [ARCHITECTURE.md](ARCHITECTURE.md) §3 흐름도에 노드를 더한다.
+5. **advisor catalog** — `recommend-settings.sh`에 runner/model/backend, GPU 수,
+   per-GPU VRAM/free VRAM, 최소 CC, 권장 context/KV/동시성을 추가한다.
+6. **회귀 테스트** — `tests/recommend-settings-test.sh`에 새 타깃의 의도된 GPU
+   추천, JSON 설정, runner 기본값 drift 검사를 추가한다.
+7. **문법 검사** — `bash -n targets/<이름>.sh`.
+8. **문서** — [targets.md](targets.md)에 절을 추가하고 [ARCHITECTURE.md](ARCHITECTURE.md) §3 흐름도에 노드를 더한다.
 
 ### 7.3 새 프로필 추가
 
@@ -498,8 +531,12 @@ ExecStop=__WORKDIR__/stop-vllm.sh
 서버를 띄우지 않고 레포 상태만 점검할 때 쓴다. 아래는 모두 실제로 실행해 결과를 확인한 것들이다.
 
 ```bash
-# 셸 문법 검사 (16개 전부 통과 확인됨)
+# 셸 문법 검사 (18개 전부 통과 확인됨)
 for f in $(find . -name '*.sh' -not -path './.git/*'); do bash -n "$f" && echo "OK  $f"; done
+
+# advisor 회귀 테스트와 현재 하드웨어 읽기
+./tests/recommend-settings-test.sh
+./recommend-settings.sh system --json | jq .
 
 # 프로필 목록
 ./use-profile.sh --help
