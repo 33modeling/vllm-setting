@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LLM 관리판</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Crect width=%2216%22 height=%2216%22 rx=%223%22 fill=%22%232f6fde%22/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div id="login" class="login" hidden>
+  <form id="login-form" class="card login-card">
+    <h1>LLM 관리판</h1>
+    <p class="muted">설치할 때 출력된 토큰을 넣으세요. 서버의 <code>control/config.yaml</code>에도 있습니다.</p>
+    <input id="token-input" type="password" autocomplete="current-password" placeholder="토큰" required>
+    <button class="primary" type="submit">들어가기</button>
+    <p id="login-error" class="error" hidden></p>
+  </form>
+</div>
+
+<div id="app" hidden>
+  <header class="top">
+    <div class="brand">LLM 관리판</div>
+    <nav class="tabs" id="tabs">
+      <button data-tab="dash" class="active">운영</button>
+      <button data-tab="envs">엔진 환경</button>
+      <button data-tab="connect">연결 정보</button>
+    </nav>
+    <div class="top-right"><span id="conn" class="muted"></span><button id="logout" class="ghost">나가기</button></div>
+  </header>
+
+  <main>
+    <section id="tab-dash">
+      <div id="gpus" class="gpus"></div>
+      <div id="orphans"></div>
+      <div id="load-errors"></div>
+      <div class="section-head">
+        <h2>인스턴스</h2>
+        <button id="new-instance" class="primary">인스턴스 만들기</button>
+      </div>
+      <div id="instances" class="instances"></div>
+    </section>
+
+    <section id="tab-envs" hidden>
+      <div class="section-head"><h2>엔진 환경</h2></div>
+      <p class="muted">엔진과 버전마다 따로 된 uv 환경입니다. 새 버전은 옆에 설치하고, 인스턴스의 엔진 경로만 바꿔 시험합니다. 돌던 환경은 바뀌지 않습니다.</p>
+      <div id="envs-dir" class="muted small"></div>
+      <div id="envs" class="env-list"></div>
+      <form id="install-form" class="card row-form">
+        <strong>새 환경 설치</strong>
+        <select id="install-engine"><option value="vllm">vLLM</option><option value="sglang">SGLang</option></select>
+        <input id="install-version" placeholder="버전 (예: 0.17.1 또는 latest)" required>
+        <button class="primary" type="submit">설치</button>
+      </form>
+      <div id="jobs"></div>
+    </section>
+
+    <section id="tab-connect" hidden>
+      <div class="section-head"><h2>연결 정보</h2></div>
+      <div id="connect" class="card"></div>
+    </section>
+  </main>
+</div>
+
+<dialog id="editor" class="wide">
+  <form method="dialog" id="editor-form">
+    <div class="dialog-head">
+      <h2 id="editor-title">인스턴스</h2>
+      <div class="seg" id="editor-mode"><button type="button" data-mode="form" class="active">항목</button><button type="button" data-mode="yaml">YAML</button></div>
+    </div>
+    <div class="grid2">
+      <label>이름 <input id="ed-name" required pattern="[a-z0-9][a-z0-9._\-]{0,47}" placeholder="qwen38-fp8"></label>
+      <label>스크립트 <select id="ed-script"></select></label>
+    </div>
+    <p id="ed-script-title" class="muted small"></p>
+    <label>설명 <input id="ed-desc" placeholder="이 인스턴스가 무엇인지 한 줄로"></label>
+    <label class="check"><input type="checkbox" id="ed-autostart"> 관리판이 켜질 때 자동 시작 (서버 재부팅 뒤 포함)</label>
+    <div id="ed-form-view">
+      <p class="muted small">비워 둔 칸은 스크립트 기본값(회색 글씨)을 씁니다. 바꾼 값만 저장됩니다.</p>
+      <div id="ed-knobs" class="knobs"></div>
+      <div class="extra-head"><strong>추가 환경 변수</strong> <button type="button" id="ed-add-env" class="ghost small">추가</button></div>
+      <div id="ed-extra"></div>
+    </div>
+    <div id="ed-yaml-view" hidden>
+      <textarea id="ed-yaml" rows="22" spellcheck="false"></textarea>
+    </div>
+    <details id="ed-history" hidden><summary>이전 판</summary><div id="ed-versions"></div></details>
+    <p id="ed-error" class="error" hidden></p>
+    <div class="dialog-foot">
+      <button type="button" id="ed-delete" class="danger ghost">지우기</button>
+      <span class="grow"></span>
+      <button type="button" value="cancel" class="ghost" id="ed-cancel">닫기</button>
+      <button type="button" id="ed-save" class="primary">저장</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="logs" class="wide">
+  <div class="dialog-head"><h2 id="logs-title">로그</h2>
+    <label class="check small"><input type="checkbox" id="logs-follow" checked> 따라가기</label>
+    <button class="ghost" id="logs-close">닫기</button></div>
+  <pre id="logs-text" class="logs"></pre>
+</dialog>
+
+<dialog id="chat">
+  <div class="dialog-head"><h2>시험 대화</h2><button class="ghost" id="chat-close">닫기</button></div>
+  <label>모델 <select id="chat-model"></select></label>
+  <label>질문 <textarea id="chat-prompt" rows="4">파이썬으로 이진 탐색 함수를 짧게 써 줘.</textarea></label>
+  <label>최대 토큰 <input id="chat-max" type="number" value="512" min="1" max="32768"></label>
+  <button class="primary" id="chat-send">보내기</button>
+  <div id="chat-result"></div>
+</dialog>
+
+<dialog id="confirm">
+  <p id="confirm-text"></p>
+  <div class="dialog-foot"><span class="grow"></span><button class="ghost" id="confirm-no">취소</button><button class="primary" id="confirm-yes">계속</button></div>
+</dialog>
+
+<div id="toast" class="toast" hidden></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

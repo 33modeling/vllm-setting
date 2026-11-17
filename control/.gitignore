@@ -1,0 +1,7 @@
+.venv/
+config.yaml
+instances/*.yaml
+instances/.history/
+logs/
+state/
+__pycache__/

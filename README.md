@@ -15,6 +15,25 @@
 
 vLLM 타깃 셋은 모두 `http://localhost:8000/v1`, 2080 Ti 구성만 llama.cpp에 `http://127.0.0.1:8080/v1` 입니다.
 
+새 모델은 타깃 스크립트를 새로 쓰지 않고 범용 스크립트에 값만 넘겨 띄울 수 있습니다.
+
+| 범용 스크립트 | 엔진 | 모델별 설정 |
+|---|---|---|
+| `targets/vllm-serve.sh` | vLLM | `MODEL`, `SERVED_MODEL_NAME`, `PORT`, `CUDA_VISIBLE_DEVICES`, 파서와 `EXTRA_ARGS` |
+| `targets/sglang-serve.sh` | SGLang | 같은 방식, 엔진 경로는 `SGLANG_PYTHON` |
+
+## 웹 관리판
+
+`control/`은 이 저장소의 타깃 스크립트를 웹 화면에서 켜고 끄고 설정하는 운영 서비스입니다. GPU 상태, 인스턴스별 상태(켜는 중·준비됨·실패), 실시간 로그, 시험 대화, 엔진 환경 설치, 모델 이름으로 요청을 나눠 주는 `/v1` 게이트웨이를 제공합니다.
+
+```bash
+control/install.sh          # 처음 한 번 (uv 필요). 주소와 로그인 토큰을 출력합니다
+git pull && control/install.sh   # 업데이트. 돌고 있는 모델은 끊기지 않습니다
+control/llmctl.sh status    # 터미널에서 상태 보기
+```
+
+엔진은 엔진·버전마다 따로 된 uv 환경에 설치합니다(`envs/install-engine.sh vllm 0.17.1`). 설계와 운영 방법은 **[docs/control.md](docs/control.md)** 에 있습니다.
+
 ## 내 하드웨어에 맞는 설정 찾기
 
 먼저 advisor를 실행하면 GPU별 VRAM·여유 VRAM·compute capability와 RAM/CPU를
@@ -71,6 +90,7 @@ print(response.choices[0].message.content)
 | [docs/scripts.md](docs/scripts.md) | 보조 스크립트 — 종료·헬스체크·벤치마크·프로필 전환·systemd·installer |
 | [docs/config.md](docs/config.md) | 설정 항목 전체 레퍼런스와 컨텍스트 튜닝 노트 |
 | [docs/agents.md](docs/agents.md) | Codex CLI · OpenCode · Claude Code 연동 |
+| [docs/control.md](docs/control.md) | **웹 관리판** — 설계, 엔진 환경 운영(venv 대안 비교), 설치·업데이트 |
 | [docs/design.md](docs/design.md) | 설계 원칙과 실행·데이터 흐름 |
 | [docs/llmfit-comparison.md](docs/llmfit-comparison.md) | llmfit 비교, advisor 판정 기준·한계·유지보수 규칙 |
 

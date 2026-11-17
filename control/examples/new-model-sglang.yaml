@@ -1,0 +1,11 @@
+# Template for serving a model with SGLang. Needs an SGLang environment: envs/install-engine.sh sglang <version>.
+script: targets/sglang-serve.sh
+description: SGLang 시험용 틀
+env:
+  MODEL: Qwen/Qwen3.8-27B-FP8
+  SERVED_MODEL_NAME: qwen3.8-27b-fp8-sglang
+  PORT: "30000"
+  CUDA_VISIBLE_DEVICES: "0,1"
+  CONTEXT_LENGTH: "32768"
+  REASONING_PARSER: qwen3
+autostart: false
