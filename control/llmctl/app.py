@@ -2,6 +2,7 @@
 import asyncio
 import contextlib
 import json
+import re
 import secrets
 import time
 
@@ -11,7 +12,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import envs, instances as I, probe, settings
+from . import envs, instances as I, models as M, probe, settings
 from .manager import Manager
 
 HOP = {"connection", "keep-alive", "transfer-encoding", "content-length", "content-encoding", "host"}
@@ -49,9 +50,10 @@ def create(cfg=None):
     # ---- management API ----------------------------------------------------------------------------------------
     @app.get("/api/state", dependencies=[Depends(auth)])
     async def state():
-        return {"instances": [mgr.describe(n) for n in sorted(mgr.instances)], "errors": mgr.errors,
+        return {"instances": [mgr.describe(n) for n in sorted(mgr.instances, key=lambda n: (n != cfg.base_instance, n))], "errors": mgr.errors,
                 "gpus": mgr.gpu, "orphans": mgr.orphans, "supervisor": mgr.sup.kind, "time": time.time(),
-                "gateway": {"aliases": cfg.aliases, "key_required": bool(cfg.gateway_key), "port": cfg.port}}
+                "base_instance": cfg.base_instance,
+                "gateway": {"aliases": {"default": mgr.default_model(), **cfg.aliases}, "key_required": bool(cfg.gateway_key), "port": cfg.port}}
 
     @app.get("/api/scripts", dependencies=[Depends(auth)])
     async def scripts():
@@ -137,6 +139,81 @@ def create(cfg=None):
             data = f.read(limit)
         return {"offset": start + len(data), "text": data.decode(errors="replace"), "size": size}
 
+    def base_info():
+        inst = mgr.instances.get(cfg.base_instance)
+        if not inst:
+            return None
+        eff = I.effective(inst, mgr.scripts[inst.script])
+        return {"instance": cfg.base_instance, "script": inst.script, "model": eff["model"]}
+
+    def classify(item, base, base_arch):
+        if item["kind"] == "gguf":
+            return "gguf"
+        if base and (item["value"] == base["model"] or item["id"] == base["model"]):
+            return "base-model"
+        if base_arch and item["architectures"] == base_arch:
+            return "variant"
+        return "other"
+
+    @app.get("/api/models", dependencies=[Depends(auth)])
+    async def model_list():
+        items = await asyncio.to_thread(M.scan, cfg.model_dirs)
+        base = base_info()
+        base_arch = next((i["architectures"] for i in items if base and i["kind"] == "hf"
+                          and (i["value"] == base["model"] or i["id"] == base["model"])), None)
+        users = {}
+        for n, inst in mgr.instances.items():
+            users.setdefault(I.effective(inst, mgr.scripts[inst.script])["model"], []).append(n)
+        out = [{**i, "family": classify(i, base, base_arch), "instances": users.get(i["value"], []) + (
+            users.get(i["id"], []) if i["id"] != i["value"] else [])} for i in items]
+        order = {"base-model": 0, "variant": 1, "other": 2, "gguf": 3}
+        out.sort(key=lambda i: (order[i["family"]], i["id"].lower()))
+        return {"base": base, "base_architectures": base_arch, "hub": str(M.hf_hub()),
+                "model_dirs": [str(d) for d in cfg.model_dirs], "models": out}
+
+    @app.post("/api/models/instance", dependencies=[Depends(auth)])
+    async def model_instance(request: Request):
+        """Make a stopped instance for one local model: a variant of the base model copies the base instance's
+        settings (same tuned script), a GGUF file goes to the llama.cpp script, anything else to vllm-serve.sh."""
+        body = await request.json()
+        value, family = str(body.get("value") or ""), body.get("family")
+        if not value:
+            fail("모델을 고르세요")
+        served = M.served_name(body.get("id") or value)
+        base = mgr.instances.get(cfg.base_instance)
+        if family in ("variant", "base-model") and base:
+            script = base.script
+            env = dict(base.env)
+            env[mgr.scripts[script].var_for("MODEL")] = value
+        elif family == "gguf":
+            script = next((p for p in mgr.scripts if "llama" in p), None)
+            if not script:
+                fail("GGUF를 돌릴 llama.cpp 스크립트가 없습니다")
+            env = {mgr.scripts[script].var_for("MODEL_PATH"): value}
+        else:
+            script = "targets/vllm-serve.sh"
+            if script not in mgr.scripts:
+                fail("targets/vllm-serve.sh를 찾지 못했습니다")
+            env = {"MODEL": value, "MAX_MODEL_LEN": "32768"}
+            if base and base.env.get("CUDA_VISIBLE_DEVICES"):
+                env["CUDA_VISIBLE_DEVICES"] = base.env["CUDA_VISIBLE_DEVICES"]
+        s = mgr.scripts[script]
+        env[s.var_for("SERVED_MODEL_NAME")] = served
+        env[s.var_for("PORT")] = str(mgr.free_port())
+        name = re.sub(r"[^a-z0-9._-]", "-", served)[:40].strip("-.") or "model"
+        stem, n = name, 2
+        while name in mgr.instances or mgr.store.raw(name) is not None:
+            name, n = f"{stem}-{n}", n + 1
+        desc = {"variant": f"{cfg.base_instance}의 설정을 그대로 쓴 변형 모델", "base-model": f"{cfg.base_instance} 복제",
+                "gguf": "GGUF 모델 (llama.cpp)"}.get(family, "범용 vLLM 스크립트로 띄우는 모델")
+        try:
+            inst = I.validate(name, {"script": script, "description": desc, "env": env}, mgr.scripts)
+        except I.Invalid as exc:
+            fail(exc)
+        mgr.store.save(inst)
+        mgr.reload()
+        return mgr.describe(name)
+
     @app.get("/api/envs", dependencies=[Depends(auth)])
     async def env_list():
         return {"dir": str(cfg.envs_dir), "envs": await asyncio.to_thread(envs.listing, cfg.envs_dir),
@@ -211,7 +288,7 @@ def create(cfg=None):
                 model = payload.get("model", "") if isinstance(payload, dict) else ""
             except ValueError:
                 payload = None
-        name, eff, real = mgr.route(model or cfg.aliases.get("default", ""))
+        name, eff, real = mgr.route(model)
         if not name:
             ready = [m["id"] for m in mgr.ready_models()]
             return JSONResponse({"error": {"message": f"model '{model}' is not running here; ready: {ready}",

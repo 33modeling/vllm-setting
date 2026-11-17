@@ -118,3 +118,6 @@ dialog::backdrop { background: rgba(0,0,0,.45); }
   .grid2, .knob, .extra-row, .kv { grid-template-columns: 1fr; }
   .knob .desc { grid-column: 1; }
 }
+.badge.base { background: var(--info-bg); color: var(--info); }
+.group-title { font-size: 14px; margin: 20px 0 2px; }
+#models .inst { margin-bottom: 10px; }

@@ -2,6 +2,8 @@
 set -euo pipefail
 # Fake target for the control panel tests: serves a stand-in engine instead of vLLM.
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# Model to serve (the fake engine only reports it).
+MODEL="${MODEL:-Qwen/Qwen3.8-27B-FP8}"
 # Name the engine answers to.
 SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-fake-model}"
 HOST="${HOST:-127.0.0.1}"

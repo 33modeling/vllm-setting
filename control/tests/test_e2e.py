@@ -35,8 +35,9 @@ class Panel:
 
     def up(self):
         env = {**os.environ, "LLMCTL_HOME": str(self.home), "LLMCTL_PORT": str(self.port),
-               "LLMCTL_SCRIPTS": "control/tests/fake-target.sh", "LLMCTL_SUPERVISOR": self.supervisor,
-               "LLMCTL_ENVS_DIR": str(self.home / "envs")}
+               "LLMCTL_SCRIPTS": "control/tests/fake-target.sh:targets/vllm-serve.sh:qwen3-coder-2080ti/run-*.sh",
+               "LLMCTL_SUPERVISOR": self.supervisor, "LLMCTL_ENVS_DIR": str(self.home / "envs"),
+               "LLMCTL_BASE": "base", "LLMCTL_MODEL_DIRS": str(self.home / "models"), "HF_HOME": str(self.home / "hf")}
         self.proc = subprocess.Popen([sys.executable, "-m", "llmctl"], cwd=CONTROL, env=env,
                                      stdout=open(self.home / "panel.out", "ab"), stderr=subprocess.STDOUT)
         self.token = None
@@ -208,7 +209,75 @@ def test_validation_and_auth(panel):
     r = panel.api("PUT", "/api/instances/x2", json={"data": {"script": "control/tests/fake-target.sh",
                                                                "env": {"PID_FILE": "/tmp/x"}}})
     assert r.status_code == 400
-    s = panel.api("GET", "/api/scripts").json()
-    knobs = {k["var"]: k for k in s[0]["knobs"]}
+    s = {x["path"]: x for x in panel.api("GET", "/api/scripts").json()}
+    assert {"control/tests/fake-target.sh", "targets/vllm-serve.sh", "qwen3-coder-2080ti/run-llama-server.sh"} <= set(s)
+    knobs = {k["var"]: k for k in s["control/tests/fake-target.sh"]["knobs"]}
     assert knobs["PORT"]["default"] == "18000" and knobs["PORT"]["comment"] == "API port."
     assert "PID_FILE" not in knobs
+
+
+def hf_model(home, repo_id, arch, quant=None):
+    snap = home / "hf" / "hub" / ("models--" + repo_id.replace("/", "--")) / "snapshots" / "abc"
+    snap.mkdir(parents=True)
+    cfg = {"architectures": [arch], "model_type": arch.lower(), "torch_dtype": "bfloat16",
+           "max_position_embeddings": 262144}
+    if quant:
+        cfg["quantization_config"] = {"quant_method": quant}
+    (snap / "config.json").write_text(json.dumps(cfg))
+
+
+def test_variants_of_the_base_model(panel):
+    home = panel.home
+    hf_model(home, "Qwen/Qwen3.8-27B-FP8", "Qwen3_8ForCausalLM", "fp8")
+    hf_model(home, "someone/Qwen3.8-27B-Coder-AWQ", "Qwen3_8ForCausalLM", "awq")
+    hf_model(home, "meta-llama/Llama-3.3-70B-Instruct", "LlamaForCausalLM")
+    (home / "models" / "q").mkdir(parents=True)
+    (home / "models" / "q" / "Qwen3.8-27B-Q4_K_M.gguf").write_bytes(b"0" * 10)
+    base_port = free_port()
+    make(panel, {"PORT": str(base_port), "SERVED_MODEL_NAME": "qwen3.8-27b-fp8", "MAX_MODEL_LEN": "65536"}, name="base")
+
+    r = panel.api("GET", "/api/models").json()
+    fam = {m["id"]: m["family"] for m in r["models"]}
+    assert fam == {"Qwen/Qwen3.8-27B-FP8": "base-model", "someone/Qwen3.8-27B-Coder-AWQ": "variant",
+                   "meta-llama/Llama-3.3-70B-Instruct": "other", "q/Qwen3.8-27B-Q4_K_M.gguf": "gguf"}
+    assert r["models"][0]["instances"] == ["base"]
+    assert next(m for m in r["models"] if m["family"] == "variant")["quant"] == "awq"
+
+    # a variant copies the base instance's script and settings and changes only model, name and port
+    v = panel.api("POST", "/api/models/instance", json={"value": "someone/Qwen3.8-27B-Coder-AWQ",
+                                                         "id": "someone/Qwen3.8-27B-Coder-AWQ", "family": "variant"})
+    assert v.status_code == 200, v.text
+    v = v.json()
+    panel.created.append(v["name"])
+    assert v["script"] == "control/tests/fake-target.sh" and v["env"]["MAX_MODEL_LEN"] == "65536"
+    assert v["env"]["MODEL"] == "someone/Qwen3.8-27B-Coder-AWQ" and v["served_name"] == "qwen3.8-27b-coder-awq"
+    assert v["port"] != base_port
+
+    o = panel.api("POST", "/api/models/instance", json={"value": "meta-llama/Llama-3.3-70B-Instruct",
+                                                         "id": "meta-llama/Llama-3.3-70B-Instruct", "family": "other"}).json()
+    panel.created.append(o["name"])
+    assert o["script"] == "targets/vllm-serve.sh" and o["env"]["MODEL"] == "meta-llama/Llama-3.3-70B-Instruct"
+    g = panel.api("POST", "/api/models/instance", json={"value": str(home / "models/q/Qwen3.8-27B-Q4_K_M.gguf"),
+                                                         "id": "q/Qwen3.8-27B-Q4_K_M.gguf", "family": "gguf"}).json()
+    panel.created.append(g["name"])
+    assert g["script"] == "qwen3-coder-2080ti/run-llama-server.sh"
+    assert g["env"]["MODEL_PATH"].endswith(".gguf") and "LLAMA_PORT" in g["env"]
+
+    # base and variant run side by side; the gateway routes by name and an empty model goes to the base
+    panel.api("POST", "/api/instances/base/start")
+    panel.api("POST", f"/api/instances/{v['name']}/start?force=true")
+    panel.wait("base", "ready", 15)
+    panel.wait(v["name"], "ready", 15)
+    msg = [{"role": "user", "content": "x"}]
+    r = httpx.post(panel.url("/v1/chat/completions"), json={"model": "qwen3.8-27b-coder-awq", "messages": msg}, timeout=20)
+    assert r.status_code == 200
+    r = httpx.post(panel.url("/v1/chat/completions"), json={"model": "default", "messages": msg}, timeout=20)
+    assert r.status_code == 200
+    ids = [m["id"] for m in httpx.get(panel.url("/v1/models")).json()["data"]]
+    assert {"qwen3.8-27b-fp8", "qwen3.8-27b-coder-awq", "default"} <= set(ids)
+    assert panel.api("GET", "/api/state").json()["instances"][0]["name"] == "base"
+
+    # two instances with the same serving name cannot run at once
+    dup = make(panel, {"PORT": str(free_port()), "SERVED_MODEL_NAME": "qwen3.8-27b-fp8", "CUDA_VISIBLE_DEVICES": "5"})
+    r = panel.api("POST", f"/api/instances/{dup}/start")
+    assert r.status_code == 400 and "서빙 이름" in r.json()["detail"]

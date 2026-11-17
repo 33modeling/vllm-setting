@@ -32,6 +32,11 @@ class Config:
                                                     "LD_LIBRARY_PATH", "VLLM_CACHE_ROOT", "TRANSFORMERS_CACHE"])
     stop_timeout: int = 60
     poll_seconds: float = 2.0
+    # The instance the panel treats as the reference: listed first, the default model of the gateway, and the
+    # source of settings when a variant of the same architecture is made from the model list.
+    base_instance: str = "qwen38-fp8"
+    # Folders with local models (HF-format directories or .gguf files) besides the HuggingFace cache.
+    model_dirs: list = field(default_factory=lambda: ["~/models"])
 
     @property
     def instances_dir(self):
@@ -57,13 +62,17 @@ def load(home=None, create=True):
     if cfg.path.exists():
         data = yaml.safe_load(cfg.path.read_text()) or {}
     for key in ("listen", "port", "token", "gateway_key", "aliases", "scripts", "supervisor", "pass_env",
-                "stop_timeout", "poll_seconds"):
+                "stop_timeout", "poll_seconds", "base_instance", "model_dirs"):
         if key in data and data[key] is not None:
             setattr(cfg, key, data[key])
     if data.get("envs_dir"):
         cfg.envs_dir = Path(str(data["envs_dir"])).expanduser()
     if os.environ.get("LLMCTL_SCRIPTS"):
         cfg.scripts = os.environ["LLMCTL_SCRIPTS"].split(":")
+    if os.environ.get("LLMCTL_BASE"):
+        cfg.base_instance = os.environ["LLMCTL_BASE"]
+    if os.environ.get("LLMCTL_MODEL_DIRS"):
+        cfg.model_dirs = os.environ["LLMCTL_MODEL_DIRS"].split(":")
     if os.environ.get("LLMCTL_ENVS_DIR"):
         cfg.envs_dir = Path(os.environ["LLMCTL_ENVS_DIR"]).expanduser()
     if os.environ.get("LLMCTL_SUPERVISOR"):

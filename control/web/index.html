@@ -23,6 +23,7 @@
     <div class="brand">LLM 관리판</div>
     <nav class="tabs" id="tabs">
       <button data-tab="dash" class="active">운영</button>
+      <button data-tab="models">모델</button>
       <button data-tab="envs">엔진 환경</button>
       <button data-tab="connect">연결 정보</button>
     </nav>
@@ -39,6 +40,12 @@
         <button id="new-instance" class="primary">인스턴스 만들기</button>
       </div>
       <div id="instances" class="instances"></div>
+    </section>
+
+    <section id="tab-models" hidden>
+      <div class="section-head"><h2>서버에 있는 모델</h2><button id="models-reload" class="ghost">다시 읽기</button></div>
+      <p class="muted" id="models-intro"></p>
+      <div id="models"></div>
     </section>
 
     <section id="tab-envs" hidden>
@@ -117,6 +124,7 @@
 </dialog>
 
 <div id="toast" class="toast" hidden></div>
+<datalist id="model-options"></datalist>
 <script src="/static/app.js"></script>
 </body>
 </html>

@@ -55,7 +55,8 @@ class Manager:
         return {**inst.as_dict(), **eff, "title": script.title, "state": state, "code": rt.get("code"),
                 "since": rt.get("since"), "ready_since": rt.get("ready_since"), "served": rt.get("served"),
                 "error_tail": rt.get("error_tail"), "drift": drift, "started_at": rec.get("started"),
-                "gpu_mem": rt.get("gpu_mem", 0), "pids": rt.get("pids", [])}
+                "gpu_mem": rt.get("gpu_mem", 0), "pids": rt.get("pids", []),
+                "base": name == self.cfg.base_instance}
 
     # ---- actions -----------------------------------------------------------------------------------------------
     def conflicts(self, name, own_port_free=True):
@@ -70,6 +71,9 @@ class Manager:
             oe = I.effective(oi, self.scripts[oi.script])
             if oe["port"] == eff["port"]:
                 problems.append(("error", f"포트 {eff['port']}를 '{other}'가 쓰고 있습니다"))
+            if oe["served_name"] and oe["served_name"] == eff["served_name"]:
+                problems.append(("error", f"서빙 이름 '{eff['served_name']}'을 '{other}'도 쓰고 있어 게이트웨이가 "
+                                          "구분하지 못합니다. SERVED_MODEL_NAME을 바꾸세요"))
             shared = set(oe["gpus"]) & set(eff["gpus"])
             if shared:
                 problems.append(("warn", f"GPU {','.join(sorted(shared))}를 '{other}'도 쓰고 있습니다"))
@@ -207,7 +211,23 @@ class Manager:
             await asyncio.sleep(self.cfg.poll_seconds)
 
     # ---- gateway routing ---------------------------------------------------------------------------------------
+    def default_model(self):
+        """aliases.default, else the base instance's serving name."""
+        if self.cfg.aliases.get("default"):
+            return self.cfg.aliases["default"]
+        inst = self.instances.get(self.cfg.base_instance)
+        return I.effective(inst, self.scripts[inst.script])["served_name"] if inst else ""
+
+    def free_port(self, start=8001):
+        used = {I.effective(i, self.scripts[i.script])["port"] for i in self.instances.values()}
+        port = start
+        while port in used or probe.port_in_use(port):
+            port += 1
+        return port
+
     def route(self, model):
+        if not model or (model == "default" and "default" not in self.cfg.aliases):
+            model = self.default_model()
         model = self.cfg.aliases.get(model, model)
         for name, inst in self.instances.items():
             rt = self.live.get(name, {})
@@ -225,7 +245,9 @@ class Manager:
             if rt.get("state") == "ready":
                 for m in rt.get("served") or [I.effective(inst, self.scripts[inst.script])["served_name"]]:
                     out.append({"id": m, "object": "model", "owned_by": f"llmctl:{name}"})
-        for alias, target in self.cfg.aliases.items():
+        aliases = dict(self.cfg.aliases)
+        aliases.setdefault("default", self.default_model())
+        for alias, target in aliases.items():
             if any(m["id"] == target for m in out):
                 out.append({"id": alias, "object": "model", "owned_by": f"llmctl:alias->{target}"})
         return out

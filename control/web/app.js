@@ -89,7 +89,8 @@ $("#tabs").addEventListener("click", (ev) => {
   if (!b) return;
   tab = b.dataset.tab;
   for (const x of $("#tabs").children) x.classList.toggle("active", x === b);
-  for (const t of ["dash", "envs", "connect"]) $(`#tab-${t}`).hidden = t !== tab;
+  for (const t of ["dash", "models", "envs", "connect"]) $(`#tab-${t}`).hidden = t !== tab;
+  if (tab === "models") loadModels();
   if (tab === "envs") loadEnvs();
   if (tab === "connect") drawConnect();
 });
@@ -162,6 +163,7 @@ function instCard(i) {
   return el("div", { class: "card inst" },
     el("div", { class: "inst-head" },
       el("span", { class: "inst-name", text: i.name }),
+      i.base ? el("span", { class: "badge base", text: "기준" }) : null,
       el("span", { class: `pill ${i.state}`, text: STATE[i.state] || i.state }),
       i.state === "failed" && i.code !== null ? el("span", { class: "muted small", text: `종료 코드 ${i.code}` }) : null,
       i.drift ? el("span", { class: "badge", text: "설정이 바뀜, 재시작해야 반영" }) : null,
@@ -226,7 +228,9 @@ function drawKnobs(script, env) {
   const known = new Set();
   for (const k of script ? script.knobs : []) {
     known.add(k.var);
-    const input = el("input", { "data-var": k.var, value: env[k.var] ?? "", placeholder: k.default || "(비어 있음)" });
+    const isModel = ["MODEL", "MODEL_PATH"].includes(k.role);
+    const input = el("input", { "data-var": k.var, value: env[k.var] ?? "", placeholder: k.default || "(비어 있음)",
+      list: isModel ? "model-options" : null });
     const label = el("div", { class: "var" + (env[k.var] ? " set" : ""), text: k.var });
     input.addEventListener("input", () => label.classList.toggle("set", !!input.value));
     box.append(el("div", { class: "knob" }, label, input, k.comment ? el("div", { class: "desc", text: k.comment }) : null));
@@ -302,6 +306,9 @@ $("#ed-script").addEventListener("change", () => {
 
 async function openEditor(name = null, duplicate = false) {
   scripts = await api("/api/scripts");
+  api("/api/models").then((r) => {
+    $("#model-options").replaceChildren(...r.models.map((m) => el("option", { value: m.value }, `${m.id} · ${m.quant || m.dtype || ""}`)));
+  }).catch(() => {});
   showEdError("");
   edMode = "form";
   for (const b of $("#editor-mode").children) b.classList.toggle("active", b.dataset.mode === "form");
@@ -406,6 +413,49 @@ $("#chat-send").onclick = async () => {
     out.replaceChildren(el("p", { class: "error", text: e.message }));
   } finally { $("#chat-send").disabled = false; }
 };
+
+// ---- models on this server -------------------------------------------------------------------------------------
+const FAMILY = {
+  "base-model": ["기준 모델", "기준 인스턴스가 쓰는 모델입니다."],
+  "variant": ["기준 모델과 같은 구조 (변형)", "파인튜닝·양자화(AWQ, GPTQ, FP8) 변형입니다. 기준 인스턴스의 설정과 스크립트를 그대로 복사해 모델만 바꿉니다."],
+  "other": ["다른 구조", "범용 vLLM 스크립트(targets/vllm-serve.sh)로 띄웁니다. 파서나 문맥 길이는 만든 뒤 편집에서 맞추세요."],
+  "gguf": ["GGUF 파일", "llama.cpp 스크립트로 띄웁니다."],
+};
+const size = (b) => b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${(b / 1e6).toFixed(0)} MB`;
+async function loadModels() {
+  let r;
+  try { r = await api("/api/models"); } catch (e) { toast(e.message, true); return; }
+  $("#models-intro").textContent = r.base
+    ? `기준: ${r.base.instance} (${r.base.model})${r.base_architectures ? ` · 구조 ${r.base_architectures.join(", ")}` : " · 기준 모델이 아직 이 서버에 내려받아져 있지 않아 같은 구조를 판별하지 못합니다"}. 찾는 곳: ${r.hub}, ${r.model_dirs.join(", ")}`
+    : `기준 인스턴스(config.yaml의 base_instance)가 없습니다. 찾는 곳: ${r.hub}, ${r.model_dirs.join(", ")}`;
+  const box = $("#models");
+  box.replaceChildren();
+  if (!r.models.length) { box.append(el("div", { class: "card empty", text: "내려받은 모델을 찾지 못했습니다. HuggingFace 캐시나 config.yaml의 model_dirs 폴더를 확인하세요." })); return; }
+  for (const fam of Object.keys(FAMILY)) {
+    const list = r.models.filter((m) => m.family === fam);
+    if (!list.length) continue;
+    box.append(el("h3", { class: "group-title", text: FAMILY[fam][0] }), el("p", { class: "muted small", text: FAMILY[fam][1] }));
+    for (const m of list) {
+      const facts = [["위치", m.where], ["크기", size(m.size)], ["양자화", m.quant || "없음"], ["dtype", m.dtype || "-"],
+        ["최대 문맥", m.context ?? "-"], ["구조", (m.architectures || []).join(", ") || m.model_type || "-"]];
+      const vram = (state?.gpus || []).reduce((a, g) => a + (g.mem_total || 0), 0) * 1024 * 1024;
+      const tooBig = vram && m.size > vram * 0.95;
+      box.append(el("div", { class: "card inst" },
+        el("div", { class: "inst-head" }, el("span", { class: "inst-name", text: m.id }),
+          tooBig ? el("span", { class: "badge", text: `가중치 ${size(m.size)}가 GPU 메모리 합계 ${size(vram)}보다 커서 이 서버에 올라가지 않습니다` }) : null,
+          m.instances.length ? el("span", { class: "muted small", text: `쓰는 인스턴스: ${m.instances.join(", ")}` }) : null),
+        el("div", { class: "facts" }, facts.map(([k, v]) => el("span", {}, `${k} `, el("b", { text: String(v) })))),
+        el("div", { class: "actions" }, el("button", { class: "primary", onclick: async () => {
+          try {
+            const inst = await api("/api/models/instance", { method: "POST", body: { value: m.value, id: m.id, family: m.family } });
+            toast(`인스턴스 ${inst.name}을(를) 꺼진 상태로 만들었습니다. 설정을 확인한 뒤 시작하세요.`);
+            openEditor(inst.name);
+          } catch (e) { toast(e.message, true); }
+        } }, "이 모델로 인스턴스 만들기"))));
+    }
+  }
+}
+$("#models-reload").onclick = loadModels;
 
 // ---- engine environments ---------------------------------------------------------------------------------------
 let jobTimer = null;
