@@ -12,11 +12,15 @@ if ! command -v uv >/dev/null 2>&1; then
   exit 1
 fi
 
+# The panel package is not installed into .venv; it is imported from this folder, so every python call below
+# runs with PYTHONPATH=$DIR (install.sh may be called from any directory).
+py() { PYTHONPATH="$DIR${PYTHONPATH:+:$PYTHONPATH}" "$DIR/.venv/bin/python" "$@"; }
+
 echo "== panel environment (control/.venv)"
 (cd "$DIR" && uv sync --frozen --no-dev -q)
 
 echo "== settings"
-(cd "$DIR" && .venv/bin/python -c "from llmctl import settings; c = settings.load(); print('  config:', c.path)")
+py -c "from llmctl import settings; c = settings.load(); print('  config:', c.path)"
 if ! compgen -G "$DIR/instances/*.yaml" >/dev/null; then
   cp "$DIR"/examples/*.yaml "$DIR/instances/"
   echo "  copied example instances into control/instances/ (edit or delete them in the panel)"
@@ -55,8 +59,8 @@ if [[ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null || true)" != "
   fi
 fi
 
-port="$("$DIR/.venv/bin/python" -c "from llmctl import settings; print(settings.load().port)")"
-token="$("$DIR/.venv/bin/python" -c "from llmctl import settings; print(settings.load().token)")"
+port="$(py -c "from llmctl import settings; print(settings.load().port)")"
+token="$(py -c "from llmctl import settings; print(settings.load().token)")"
 cat <<EOF
 
 Panel:    http://$(hostname -I 2>/dev/null | awk '{print $1}'):$port/#token=$token   (logs this browser in once)
